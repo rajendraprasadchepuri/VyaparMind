@@ -23,11 +23,12 @@ if not st.session_state["authenticated"]:
     # Custom CSS for Premium Split-Screen Landing Page
     st.markdown("""
         <style>
+        /* --- MUST BE FIRST --- */
+        @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap');
+        
         /* --- GLOBAL RESETS --- */
         [data-testid="stSidebar"] { display: none; }
         [data-testid="stHeader"] { visibility: hidden; }
-        
-        @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap');
         
         html, body, [class*="css"] {
             font-family: 'Plus Jakarta Sans', sans-serif;
@@ -42,12 +43,14 @@ if not st.session_state["authenticated"]:
         }
         div[data-testid="stAppViewContainer"] {
             overflow: hidden;
+            height: 100vh;
         }
 
         /* --- SPLIT LAYOUT GRID --- */
         [data-testid="stHorizontalBlock"] {
             gap: 0 !important;
             height: 100vh;
+            min-height: 100vh;
             align-items: stretch;
         }
         
@@ -60,6 +63,7 @@ if not st.session_state["authenticated"]:
             align-items: center;
             position: relative;
             padding: 2rem;
+            height: 100%; /* Force Full Height */
         }
         
         /* Pattern Overlay for Col 1 */
@@ -79,9 +83,9 @@ if not st.session_state["authenticated"]:
             background-color: #ffffff;
             display: flex;
             flex-direction: column;
-            justify-content: center;
-            /* align-items: center;  <-- REMOVED to let child use margin:auto */
-            padding: 2rem;
+            justify-content: center; /* Vertical Center */
+            padding: 4rem;
+            height: 100%; /* Force Full Height */
         }
 
         /* --- CONTENT STYLING --- */
@@ -89,81 +93,114 @@ if not st.session_state["authenticated"]:
             z-index: 10;
             text-align: center;
             color: white;
-            max-width: 90%;
+            max-width: 85%;
+            margin-top: -5vh; /* Visual correction to appear perfectly centered */
         }
 
         .brand-logo-img {
-            /* Removed border-radius & box-shadow to show original logo */
-            margin-bottom: -5rem; /* INCREASED NEGATIVE MARGIN */
-            width: 420px; /* INCREASED SIZE */
+            margin-bottom: -5rem; 
+            width: clamp(350px, 45vw, 500px); /* LARGER BASE SIZE */
             display: block; 
             margin-left: auto;
             margin-right: auto;
         }
 
         .brand-title {
-            font-size: 4.5rem;
+            font-size: clamp(4rem, 8vw, 6.5rem); /* SIGNIFICANTLY LARGER */
             font-weight: 800;
-            letter-spacing: -1.5px;
+            letter-spacing: -2px;
             margin-bottom: 0.5rem;
             color: #ffffff; 
             background: none;
             -webkit-text-fill-color: initial;
             position: relative; 
             z-index: 20;
+            line-height: 1;
         }
 
         .brand-tagline {
-            font-size: 1.1rem;
+            font-size: clamp(1.1rem, 1.5vw, 1.8rem);
             font-weight: 700;
             color: #fbbf24;
-            letter-spacing: 4px;
+            letter-spacing: 6px; /* More spacing for luxury feel */
             text-transform: uppercase;
             margin-bottom: 2rem;
-            opacity: 1;
+            opacity: 0.95;
         }
 
         .brand-desc {
-            font-size: 1.2rem;
-            color: #e2e8f0; /* Very light gray */
-            font-weight: 300;
+            font-size: clamp(1.2rem, 1.5vw, 1.6rem); /* Larger Body Text */
+            color: #f1f5f9; /* Near White for better contrast */
+            font-weight: 400; /* Regular weight instead of light */
             line-height: 1.6;
         }
         
         /* Auth Card Area */
         .auth-card {
             width: 100%;
-            max-width: 420px;
-            margin: auto; /* Forces horizontal centering */
+            max-width: 500px; /* Wider card */
+            margin: auto; 
             padding: 1rem;
+        }
+        
+        /* Auth Headings */
+        .auth-header {
+            font-size: clamp(2.5rem, 4vw, 3.5rem); /* MUCH LARGER WELCOME */
+            font-weight: 800;
+            color: #0f172a;
+            margin-bottom: 0.5rem;
+            line-height: 1.2;
+        }
+        .auth-sub {
+            font-size: clamp(1rem, 1.2vw, 1.3rem);
+            color: #64748b;
+            margin-top: -5px;
+            margin-bottom: 2.5rem;
         }
 
         /* Components overrides */
         div.stButton > button {
             background: #0f172a !important;
             color: white !important;
-            border-radius: 8px;
-            height: 3.2rem;
-            font-weight: 600;
+            border-radius: 12px; /* Softer corners */
+            height: 4rem; /* Taller button */
+            font-size: 1.2rem !important;
+            font-weight: 700;
+            letter-spacing: 0.5px;
             width: 100%;
-            margin-top: 1rem;
+            margin-top: 1.5rem;
+            transition: all 0.2s;
         }
+        div.stButton > button:hover {
+            background: #1e293b !important;
+            transform: translateY(-2px);
+            box-shadow: 0 10px 20px -10px rgba(15, 23, 42, 0.5);
+        }
+
         div[data-testid="stTextInput"] input {
             background-color: #f8fafc !important;
-            border: 1px solid #e2e8f0 !important;
-            padding: 1rem;
-            border-radius: 8px;
-            color: #1e293b !important;
+            border: 2px solid #e2e8f0 !important; /* Thicker border */
+            padding: 1.2rem;
+            border-radius: 12px;
+            color: #0f172a !important;
+            font-size: 1.1rem;
+            margin-bottom: 0.5rem;
         }
         div[data-testid="stTextInput"] input:focus {
             background-color: white !important;
             border-color: #0f172a !important;
-            box-shadow: 0 0 0 2px rgba(15, 23, 42, 0.1);
+            box-shadow: 0 0 0 4px rgba(15, 23, 42, 0.1);
+        }
+        div[data-testid="stTextInput"] label {
+            font-size: 1rem !important;
+            font-weight: 600 !important;
+            color: #334155 !important;
         }
         
-        h3 { 
-            color: #0f172a !important; 
-            font-weight: 700;
+        div.stTabs [data-baseweb="tab"] {
+            font-size: 1.2rem;
+            font-weight: 600;
+            padding-bottom: 1rem;
         }
         </style>
     """, unsafe_allow_html=True)
@@ -183,7 +220,7 @@ if not st.session_state["authenticated"]:
         except:
             logo_html = '<h1 style="font-size: 5rem;">🧠</h1>'
 
-        # Render Left Panel Content as SINGLE BLOCK
+        # Render Left Panel Content
         st.markdown(f"""
             <div class="brand-content">
                 {logo_html}
@@ -198,11 +235,13 @@ if not st.session_state["authenticated"]:
 
     with col2:
         # RIGHT PANEL
-        # We wrap content in a div for width control and centering, AVOIDING nested columns
         st.markdown('<div class="auth-card">', unsafe_allow_html=True)
         
-        st.markdown("### Welcome Back")
-        st.markdown("<p style='color: #64748b; margin-top: -10px;'>Enter your credentials to access the workspace.</p>", unsafe_allow_html=True)
+        # Combined HTML for Headers to ensure CSS styling works
+        st.markdown("""
+            <div class="auth-header">Welcome Back</div>
+            <div class="auth-sub">Enter your credentials to access the workspace.</div>
+        """, unsafe_allow_html=True)
         
         tab1, tab2 = st.tabs(["Login", "Sign Up"])
         
