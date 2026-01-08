@@ -104,6 +104,17 @@ def init_db():
     except sqlite3.OperationalError:
         pass
 
+    # Users Table (New)
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT UNIQUE NOT NULL,
+            email TEXT,
+            password_hash TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+
     conn.commit()
     conn.close()
 
@@ -263,8 +274,50 @@ def record_transaction(items, total_amount, total_profit, customer_id=None, poin
     finally:
         conn.close()
 
+
 def get_low_stock_products(threshold=10):
     conn = get_connection()
     df = pd.read_sql_query("SELECT * FROM products WHERE stock_quantity <= ?", conn, params=(threshold,))
     conn.close()
     return df
+
+import hashlib
+
+def create_user(username, password, email):
+    """Creates a new user with hashed password."""
+    conn = get_connection()
+    c = conn.cursor()
+    try:
+        # Simple SHA256 hashing
+        password_hash = hashlib.sha256(password.encode()).hexdigest()
+        
+        c.execute("INSERT INTO users (username, email, password_hash) VALUES (?, ?, ?)", 
+                  (username, email, password_hash))
+        conn.commit()
+        return True, "User created successfully."
+    except sqlite3.IntegrityError:
+        return False, "Username already exists."
+    except Exception as e:
+        return False, str(e)
+    finally:
+        conn.close()
+
+def verify_user(username, password):
+    """Verifies user credentials."""
+    conn = get_connection()
+    c = conn.cursor()
+    try:
+        c.execute("SELECT password_hash FROM users WHERE username = ?", (username,))
+        result = c.fetchone()
+        
+        if result:
+            stored_hash = result[0]
+            input_hash = hashlib.sha256(password.encode()).hexdigest()
+            if stored_hash == input_hash:
+                return True, "Login successful."
+        
+        return False, "Invalid username or password."
+    except Exception as e:
+        return False, str(e)
+    finally:
+        conn.close()
