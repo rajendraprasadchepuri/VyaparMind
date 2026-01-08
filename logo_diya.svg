@@ -1,0 +1,28 @@
+<svg width="200" height="200" viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="gradDiya" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#FF9933;stop-opacity:1" /> <!-- Saffron -->
+      <stop offset="100%" style="stop-color:#FF512F;stop-opacity:1" /> <!-- Deep Orange -->
+    </linearGradient>
+    <linearGradient id="gradFlame" x1="0%" y1="100%" x2="0%" y2="0%">
+      <stop offset="0%" style="stop-color:#FFD700;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#FFF700;stop-opacity:1" />
+    </linearGradient>
+  </defs>
+  
+  <rect width="200" height="200" fill="white" rx="30" />
+  
+  <!-- Diya Base (The Business Foundation) -->
+  <path d="M50 120 Q100 170 150 120" fill="url(#gradDiya)" stroke="none" />
+  <path d="M50 120 L150 120" stroke="#800000" stroke-width="2" />
+  
+  <!-- The Flame (Rising Graph) -->
+  <path d="M100 120 Q80 80 100 40 Q120 80 100 120" fill="url(#gradFlame)" />
+  
+  <!-- Graph Bars inside Flame (Subtle) -->
+  <rect x="90" y="80" width="5" height="40" fill="#cc3300" opacity="0.2"/>
+  <rect x="98" y="70" width="5" height="50" fill="#cc3300" opacity="0.2"/>
+  <rect x="106" y="60" width="5" height="60" fill="#cc3300" opacity="0.2"/>
+
+  <text x="100" y="180" font-family="Arial" font-size="16" fill="#800000" text-anchor="middle" font-weight="bold">SHUBH LABH</text>
+</svg>

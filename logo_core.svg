@@ -1,0 +1,26 @@
+<svg width="200" height="200" viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="face1" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#43e97b;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#38f9d7;stop-opacity:1" />
+    </linearGradient>
+    <linearGradient id="face2" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#38f9d7;stop-opacity:0.8" />
+      <stop offset="100%" style="stop-color:#11998e;stop-opacity:1" />
+    </linearGradient>
+  </defs>
+  
+  <rect width="200" height="200" fill="#f8f9fa" rx="40" />
+  
+  <!-- Isometric Cube -->
+  <path d="M100 40 L160 70 L100 100 L40 70 Z" fill="url(#face1)" />
+  <path d="M40 70 L100 100 L100 170 L40 140 Z" fill="url(#face2)" />
+  <path d="M160 70 L160 140 L100 170 L100 100 Z" fill="#11998e" />
+  
+  <!-- White highlight (Brain logic) -->
+  <path d="M100 100 L100 140" stroke="white" stroke-width="4" stroke-linecap="round" opacity="0.5"/>
+  <path d="M100 100 L140 80" stroke="white" stroke-width="4" stroke-linecap="round" opacity="0.5"/>
+  <path d="M100 100 L60 80" stroke="white" stroke-width="4" stroke-linecap="round" opacity="0.5"/>
+
+  <text x="100" y="190" font-family="'Segoe UI', sans-serif" font-size="14" fill="#333" text-anchor="middle" font-weight="900">CORE</text>
+</svg>

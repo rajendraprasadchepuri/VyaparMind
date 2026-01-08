@@ -1,0 +1,23 @@
+<svg width="200" height="200" viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="grad1" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#11998e;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#38ef7d;stop-opacity:1" />
+    </linearGradient>
+  </defs>
+  <rect width="200" height="200" fill="white" rx="20" />
+  <path d="M90 180 L90 120 Q90 100 70 80 M110 180 L110 120 Q110 100 130 80" stroke="#333" stroke-width="8" fill="none" stroke-linecap="round"/>
+  <g stroke="#11998e" stroke-width="3">
+    <line x1="70" y1="80" x2="50" y2="60" />
+    <line x1="70" y1="80" x2="90" y2="50" />
+    <line x1="130" y1="80" x2="110" y2="50" />
+    <line x1="130" y1="80" x2="150" y2="60" />
+    <line x1="100" y1="120" x2="100" y2="40" stroke-width="2" stroke-dasharray="5,3"/>
+  </g>
+  <circle cx="50" cy="60" r="10" fill="url(#grad1)" />
+  <circle cx="90" cy="50" r="12" fill="url(#grad1)" />
+  <circle cx="110" cy="50" r="12" fill="url(#grad1)" />
+  <circle cx="150" cy="60" r="10" fill="url(#grad1)" />
+  <circle cx="100" cy="90" r="8" fill="url(#grad1)" />
+  <text x="100" y="190" font-family="Arial" font-size="16" fill="#333" text-anchor="middle" font-weight="bold">GROWTH</text>
+</svg>

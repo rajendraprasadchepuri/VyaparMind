@@ -1,0 +1,35 @@
+
+# Regenerating the Ascending Lotus (Logo Option 3) with perfect centering
+svg_opt3_centered = """<svg width="200" height="200" viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="gradRoyal" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#004e92;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#000428;stop-opacity:1" />
+    </linearGradient>
+    <linearGradient id="gradGold" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#FFD700;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#daa520;stop-opacity:1" />
+    </linearGradient>
+  </defs>
+  
+  <!-- Transparent Background for cleaner fit -->
+  <rect width="200" height="200" fill="none" />
+  
+  <g transform="translate(100, 110)"> <!-- Adjusted center Y to account for upward curves -->
+    <!-- Central Petal (High Growth) -->
+    <!-- Start from 0,0 (relative center) and go up -->
+    <path d="M0 20 Q-25 -40 0 -90 Q25 -40 0 20" fill="url(#gradRoyal)" stroke="white" stroke-width="2"/>
+    
+    <!-- Side Petals (Support) -->
+    <!-- Spreading out symmetrically -->
+    <path d="M0 20 Q-50 0 -60 -50 Q-20 -20 0 20" fill="url(#gradGold)" stroke="white" stroke-width="2"/>
+    <path d="M0 20 Q50 0 60 -50 Q20 -20 0 20" fill="url(#gradGold)" stroke="white" stroke-width="2"/>
+    
+    <!-- Core/Base Dot -->
+    <circle cx="0" cy="20" r="12" fill="#000428" stroke="#daa520" stroke-width="2"/>
+  </g>
+</svg>"""
+
+with open("logo_no_text_3.svg", "w", encoding="utf-8") as f: f.write(svg_opt3_centered)
+
+print("Regenerated Centered Lotus Logo.")

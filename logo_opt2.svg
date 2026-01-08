@@ -1,0 +1,16 @@
+<svg width="200" height="200" viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="grad2" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#FF9966;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#FF5E62;stop-opacity:1" />
+    </linearGradient>
+  </defs>
+  <circle cx="100" cy="100" r="90" fill="#FFF5F0" />
+  <path d="M50 70 L90 140 L160 50" fill="none" stroke="url(#grad2)" stroke-width="20" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="50" cy="70" r="8" fill="#333" />
+  <circle cx="90" cy="140" r="8" fill="#333" />
+  <circle cx="160" cy="50" r="8" fill="#333" />
+  <path d="M160 50 Q180 80 170 110" fill="none" stroke="#FF5E62" stroke-width="4" stroke-dasharray="5,5" />
+  <circle cx="170" cy="110" r="6" fill="#FF5E62" />
+  <text x="100" y="180" font-family="Arial" font-size="16" fill="#FF5E62" text-anchor="middle" font-weight="bold">SUCCESS</text>
+</svg>
