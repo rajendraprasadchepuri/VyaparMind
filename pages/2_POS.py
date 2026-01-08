@@ -15,23 +15,31 @@ if 'cart' not in st.session_state:
     st.session_state.cart = []
 
 def add_to_cart(product_id, name, price, cost, stock, qty, tax_rate=0.0):
-    # Check if already in cart
-    current_qty_in_cart = sum(item['qty'] for item in st.session_state.cart if item['id'] == product_id)
+    # Check total quantity currently in cart for this product
+    existing_item_index = next((index for (index, d) in enumerate(st.session_state.cart) if d["id"] == product_id), None)
+    current_qty_in_cart = st.session_state.cart[existing_item_index]['qty'] if existing_item_index is not None else 0
     
     if current_qty_in_cart + qty > stock:
         st.toast(f"❌ Not enough stock! Available: {stock}", icon="⚠️")
         return
 
-    st.session_state.cart.append({
-        "id": product_id,
-        "name": name,
-        "price": price,
-        "cost": cost,
-        "qty": qty,
-        "tax_rate": tax_rate,
-        "total": price * qty
-    })
-    st.toast(f"Added {qty} x {name} to cart", icon="🛒")
+    if existing_item_index is not None:
+        # Update existing item
+        st.session_state.cart[existing_item_index]['qty'] += qty
+        st.session_state.cart[existing_item_index]['total'] = st.session_state.cart[existing_item_index]['price'] * st.session_state.cart[existing_item_index]['qty']
+        st.toast(f"Updated {name} quantity to {st.session_state.cart[existing_item_index]['qty']}", icon="🛒")
+    else:
+        # Add new item
+        st.session_state.cart.append({
+            "id": product_id,
+            "name": name,
+            "price": price,
+            "cost": cost,
+            "qty": qty,
+            "tax_rate": tax_rate,
+            "total": price * qty
+        })
+        st.toast(f"Added {qty} x {name} to cart", icon="🛒")
 
 def clear_cart():
     st.session_state.cart = []
@@ -47,6 +55,8 @@ with st.expander("👤 Customer Details (Optional)", expanded=True):
         phone_input = st.text_input("Enter Customer Phone", placeholder="e.g. 9876543210")
     
     with c_s2:
+        st.write("") # Spacer to align with text_input label
+        st.write("")
         if phone_input:
             # Search DB
             cust = db.get_customer_by_phone(phone_input)
@@ -80,8 +90,6 @@ with st.expander("👤 Customer Details (Optional)", expanded=True):
 
 # --- Layout ---
 col_products, col_cart = st.columns([3, 2])
-
-# Right: Cart & Checkout (Logic only, UI below)
 
 # Left: Product Selection
 with col_products:
@@ -131,57 +139,113 @@ with col_cart:
     st.subheader("🛒 Current Cart")
     
     if st.session_state.cart:
-        cart_df = pd.DataFrame(st.session_state.cart)
+        # Header for Cart
+        col_h1, col_h2, col_h3, col_h4, col_h5 = st.columns([2, 1, 1, 1, 0.5])
+        with col_h1: st.markdown("**Item**")
+        with col_h2: st.markdown("**Price**")
+        with col_h3: st.markdown("**Qty**")
+        with col_h4: st.markdown("**Total**")
         
-        # Calculate Tax Amount per row for display
-        cart_df['tax_amount'] = cart_df['total'] * (cart_df['tax_rate'] / 100)
+        # Display Items with Remove Button
+        index_to_remove = None
         
-        # Group by product
-        cart_view = cart_df.groupby(['id', 'name', 'price']).agg({
-            'qty': 'sum', 
-            'total': 'sum',
-            'tax_amount': 'sum'
-        }).reset_index()
+        for i, item in enumerate(st.session_state.cart):
+             with st.container(border=True):
+                 c1, c2, c3, c4, c5 = st.columns([2, 1, 1, 1, 0.5])
+                 with c1: st.write(f"{item['name']}")
+                 with c2: st.write(f"₹{item['price']:.2f}")
+                 with c3: st.write(f"{item['qty']}")
+                 with c4: st.write(f"₹{item['total']:.2f}")
+                 with c5:
+                     if st.button("🗑️", key=f"del_{i}", help="Remove Item"):
+                         index_to_remove = i
         
-        # Rename for clearer display
-        cart_view = cart_view.rename(columns={'tax_amount': 'GST'})
+        # Handle Removal outside loop
+        if index_to_remove is not None:
+            st.session_state.cart.pop(index_to_remove)
+            st.rerun()
         
-        st.dataframe(
-            cart_view[['name', 'qty', 'price', 'GST', 'total']],
-            column_config={
-                "price": st.column_config.NumberColumn("Price", format="₹%.2f"),
-                "GST": st.column_config.NumberColumn("GST", format="₹%.2f"),
-                "total": st.column_config.NumberColumn("Total", format="₹%.2f")
-            },
-            hide_index=True,
-            use_container_width=True
-        )
-        
-        total_amount = cart_view['total'].sum()
-        total_tax_disp = cart_view['GST'].sum()
-        
-        # ...
-
-            # Pass Customer ID to DB
-            txn_id = db.record_transaction(items_to_record, total_amount, potential_profit, customer_id=selected_customer_id)
+        # Totals Display
+        if st.session_state.cart:
+            current_total = sum(item['total'] for item in st.session_state.cart)
+            current_tax = sum(item['total'] * (item['tax_rate']/100) for item in st.session_state.cart)
             
+            st.write("---")
+            st.markdown(f"**Subtotal: ₹{current_total:.2f}**")
+            st.markdown(f"**GST: ₹{current_tax:.2f}**")
+            st.markdown(f"<h3>Total: ₹{(current_total + current_tax):.2f}</h3>", unsafe_allow_html=True)
+            
+            # Checkout Section
+            st.write("---")
+            
+            # Loyalty Redemption Logic
+            points_to_redeem = 0
+            cust_points = 0
+            
+            if selected_customer_id:
+                # Re-fetch latest points to be sure
+                cust_data = db.get_customer_by_phone(phone_input)
+                if cust_data is not None:
+                    cust_points = cust_data['loyalty_points']
+                    
+                    if cust_points >= 1000:
+                        total_payable_pre = current_total + current_tax
+                        max_redeem = min(cust_points, int(total_payable_pre))
+                        
+                        st.info(f"🎉 You have {cust_points} Loyalty Points! (Min 1000 to redeem)")
+                        use_points = st.checkbox("Redeem Points?", key="redeem_chk")
+                        
+                        if use_points:
+                            points_to_redeem = st.number_input("Points to Redeem (1 Point = ₹1)", 
+                                                             min_value=0, max_value=max_redeem, value=0, step=10)
+                            if points_to_redeem > 0:
+                                st.success(f"Redeeming {points_to_redeem} points. -₹{points_to_redeem}")
+
+            c1_btn, c2_btn = st.columns(2)
+            
+            txn_id = None # Initialize to prevent NameError
+            
+            with c1_btn:
+                potential_profit = sum((item['price'] - item['cost']) * item['qty'] for item in st.session_state.cart)
+                
+                # Show Final Pay
+                final_total_pay = (current_total + current_tax) - points_to_redeem
+                st.markdown(f"**Net Payable: ₹{final_total_pay:.2f}**")
+                
+                if st.button("Checkout ✅", use_container_width=True):
+                    # Consolidate items for DB
+                    from collections import defaultdict
+                    grouped_cart = {}
+                    for item in st.session_state.cart:
+                        pid = item['id']
+                        if pid in grouped_cart:
+                            grouped_cart[pid]['qty'] += item['qty']
+                            grouped_cart[pid]['total'] += item['total']
+                        else:
+                            grouped_cart[pid] = item.copy()
+                            
+                    items_to_record = list(grouped_cart.values())
+                    total_amt_base = sum(x['total'] for x in items_to_record)
+                    
+                    # Pass points_redeemed to DB
+                    txn_id = db.record_transaction(items_to_record, total_amt_base, potential_profit, 
+                                                 customer_id=selected_customer_id, points_redeemed=points_to_redeem)
+            
+            # Invoice Generation Block
             if txn_id:
-                st.success(f"Transaction #{txn_id} Completed Successfully!")
+                st.success(f"Transaction Recorded! Ref: {txn_id}")
                 st.balloons()
                 
-                # --- Invoice Generation ---
-                # Generate HTML Receipt
                 cust_info = ""
                 if selected_customer_id:
-                     cust = db.get_customer_by_phone(phone_input) # Re-fetch to be safe or use cached
+                     cust = db.get_customer_by_phone(phone_input) 
                      if cust is not None:
-                         cust_info = f"<p>Customer: {cust['name']}<br>Phone: {cust['phone']}</p>"
+                         # Fetch new points balance after transaction
+                         cust_info = f"<p>Customer: {cust['name']}<br>Phone: {cust['phone']}<br>Points Bal: {cust['loyalty_points']}</p>"
                 
-                # Current Date
                 from datetime import datetime
                 date_str = datetime.now().strftime("%d-%b-%Y %H:%M:%S")
                 
-                # Fetch Store Settings (No Global Tax Rate anymore)
                 store_name = db.get_setting('store_name') or "VyaparMind Store"
                 store_addr = db.get_setting('store_address') or "Hyderabad, India"
                 store_phone = db.get_setting('store_phone') or ""
@@ -198,38 +262,50 @@ with col_cart:
                         encoded_string = base64.b64encode(image_file.read()).decode()
                     logo_html = f'<img src="data:image/svg+xml;base64,{encoded_string}" style="width: 50px; display: block; margin: 0 auto 5px auto;">'
                 except:
-                    logo_html = "" # Fallback if file missing
+                    logo_html = "" 
 
-                # Calculate Tax Per Item
-                total_tax_amount = 0
+                # Re-consolidate for display consistency
+                grouped_cart_disp = {}
+                for item in st.session_state.cart:
+                     pid = item['id']
+                     if pid in grouped_cart_disp:
+                         grouped_cart_disp[pid]['qty'] += item['qty']
+                         grouped_cart_disp[pid]['total'] += item['total']
+                     else:
+                         grouped_cart_disp[pid] = item.copy()
+                
+                items_disp = list(grouped_cart_disp.values())
+                
+                total_amount_disp = 0
+                total_tax_disp = 0
                 items_html = ""
                 
-                for item in items_to_record:
-                    # Retrieve tax rate we stored in cart
+                for item in items_disp:
                     i_tax = item.get('tax_rate', 0.0)
                     i_total = item['total']
-                    
-                    # Tax Amount for this line item
                     item_tax = i_total * (i_tax / 100)
-                    total_tax_amount += item_tax
-                    
-                    # User requested Amt = (Qty*Rate) + GST
+                    total_tax_disp += item_tax
                     item_grand_total = i_total + item_tax
+                    total_amount_disp += i_total
                     
-                    items_html += f"<tr><td>{item['name']} <span style='font-size:9px; color:#666;'>({i_tax}%)</span></td><td>{item['qty']}</td><td>₹{item['price']:.2f}</td><td>₹{item_tax:.2f}</td><td>₹{item_grand_total:.2f}</td></tr>"
+                    items_html += f"<tr><td>{item['name']} <span style='font-size:9px; color:#666;'>ID: {item['id']}</span></td><td>{item['qty']}</td><td>₹{item['price']:.2f}</td><td>₹{item_tax:.2f}</td><td>₹{item_grand_total:.2f}</td></tr>"
                 
-                grand_total = total_amount + total_tax_amount
+                grand_total_disp = total_amount_disp + total_tax_disp
+                cgst_disp = total_tax_disp / 2
+                sgst_disp = total_tax_disp / 2
                 
-                # GST Split (50% Central, 50% State)
-                cgst_amount = total_tax_amount / 2
-                sgst_amount = total_tax_amount / 2
+                # Adjust finals for Redemption
+                final_payable_disp = grand_total_disp - points_to_redeem
                 
                 gst_line = f"<p style='text-align: center; font-size: 11px; margin-top: -10px;'>GSTIN: {store_gst}</p>" if store_gst else ""
                 phone_line = f"<p style='text-align: center; font-size: 11px; margin-top: -10px;'>Ph: {store_phone}</p>" if store_phone else ""
                 
-                # Fix Indentation using textwrap.dedent
+                redemption_html = ""
+                if points_to_redeem > 0:
+                    redemption_html = f"<p style='text-align: right; font-size: 12px; color: green;'>Points Redeemed: -₹{points_to_redeem:.2f}</p>"
+                
                 invoice_html = textwrap.dedent(f"""
-                <div style="border: 1px solid #ccc; padding: 20px; width: 300px; font-family: 'Courier New', monospace; background: white; color: black;">
+                <div style="border: 1px solid #ccc; padding: 20px; width: 450px; font-family: 'Courier New', monospace; background: white; color: black; box-sizing: border-box; overflow-x: hidden;">
                     {logo_html}
                     <h3 style="text-align: center; margin: 0;">{store_name}</h3>
                     <p style="text-align: center; font-size: 12px; margin-bottom: 5px;">{store_addr}</p>
@@ -250,28 +326,25 @@ with col_cart:
                         {items_html}
                     </table>
                     <hr>
-                    <p style="text-align: right; font-size: 12px;">Subtotal: ₹{total_amount:.2f}</p>
-                    <p style="text-align: right; font-size: 12px;">CGST (50%): ₹{cgst_amount:.2f}</p>
-                    <p style="text-align: right; font-size: 12px;">SGST (50%): ₹{sgst_amount:.2f}</p>
-                    <p style="text-align: right; font-size: 16px;"><strong>TOTAL: ₹{grand_total:.2f}</strong></p>
+                    <p style="text-align: right; font-size: 12px;">Subtotal: ₹{total_amount_disp:.2f}</p>
+                    <p style="text-align: right; font-size: 12px;">CGST (50%): ₹{cgst_disp:.2f}</p>
+                    <p style="text-align: right; font-size: 12px;">SGST (50%): ₹{sgst_disp:.2f}</p>
+                    <p style="text-align: right; font-size: 16px;"><strong>TOTAL: ₹{grand_total_disp:.2f}</strong></p>
+                    {redemption_html}
+                    <p style="text-align: right; font-size: 18px; border-top: 1px solid black; margin-top: 5px; padding-top: 5px;"><strong>NET PAYABLE: ₹{final_payable_disp:.2f}</strong></p>
                     <hr>
                     <p style="text-align: center; font-size: 10px;">{footer_msg}</p>
                 </div>
                 """)
                 
-                # Store in session state to persist after rerun (if we wanted to clear cart but keep bill)
-                # For now, let's just show it.
                 st.session_state['last_invoice'] = invoice_html
-                st.session_state['cart'] = [] # Clear cart
+                st.session_state['cart'] = [] 
                 st.rerun()
-            else:
-                st.error("Transaction Failed. Check Database.")
     
-    # Show Last Invoice if exists (persists until next action)
+    # Show Last Invoice if exists
     if 'last_invoice' in st.session_state and st.session_state['last_invoice']:
         with st.expander("📄 Last Bill / Print", expanded=True):
             st.markdown(st.session_state['last_invoice'], unsafe_allow_html=True)
-            # Browser Print Button Hack
             st.markdown("""
             <button onclick="window.print()">🖨️ Print Receipt</button>
             <script>
@@ -289,7 +362,7 @@ with col_cart:
                 del st.session_state['last_invoice']
                 st.rerun()
                 
-        if c2.button("Clear Cart 🗑️", use_container_width=True):
+        if st.button("Clear Cart 🗑️", use_container_width=True):
             clear_cart()
             st.rerun()
             

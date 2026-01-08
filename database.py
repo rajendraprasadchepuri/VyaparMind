@@ -92,6 +92,18 @@ def init_db():
     except sqlite3.OperationalError:
         pass
 
+    # Migration: Add transaction_hash to transactions if not exists
+    try:
+        c.execute("ALTER TABLE transactions ADD COLUMN transaction_hash TEXT")
+    except sqlite3.OperationalError:
+        pass
+    
+    # Migration: Add points_redeemed to transactions
+    try:
+        c.execute("ALTER TABLE transactions ADD COLUMN points_redeemed INTEGER DEFAULT 0")
+    except sqlite3.OperationalError:
+        pass
+
     conn.commit()
     conn.close()
 
@@ -202,18 +214,23 @@ def update_stock(product_id, quantity_change):
     conn.commit()
     conn.close()
 
-def record_transaction(items, total_amount, total_profit, customer_id=None):
+def record_transaction(items, total_amount, total_profit, customer_id=None, points_redeemed=0):
     """
     items: list of dicts {'id': prod_id, 'name': name, 'qty': qty, 'price': price, 'cost': cost}
     customer_id: Optional ID of the customer
+    points_redeemed: Amount of loyalty points used (1 point = 1 unit currency)
     """
     conn = get_connection()
     c = conn.cursor()
     
+    import secrets
+    # Generate 16-char unique hash
+    txn_hash = secrets.token_hex(8) # 8 bytes = 16 hex chars
+    
     try:
         # 1. Create Transaction Record
-        c.execute('INSERT INTO transactions (total_amount, total_profit, timestamp, customer_id) VALUES (?, ?, ?, ?)', 
-                  (total_amount, total_profit, datetime.now(), customer_id))
+        c.execute('INSERT INTO transactions (total_amount, total_profit, timestamp, customer_id, transaction_hash, points_redeemed) VALUES (?, ?, ?, ?, ?, ?)', 
+                  (total_amount, total_profit, datetime.now(), customer_id, txn_hash, points_redeemed))
         transaction_id = c.lastrowid
         
         # 2. Add Line Items and Update Stock
@@ -226,13 +243,19 @@ def record_transaction(items, total_amount, total_profit, customer_id=None):
             # Deduct stock
             c.execute('UPDATE products SET stock_quantity = stock_quantity - ? WHERE id = ?', (item['qty'], item['id']))
         
-        # 3. Update Loyalty Points (if customer exists) - Simple 1 point per 10 currency logic
+        # 3. Update Loyalty Points
         if customer_id:
-            points = int(total_amount / 10)
-            c.execute('UPDATE customers SET loyalty_points = loyalty_points + ? WHERE id = ?', (points, customer_id))
+            # Earn: 1 point per 10 currency of final paid amount? Or total? 
+            # Sticking to Total Amount for earning to keep it simple.
+            points_earned = int(total_amount / 10)
+            
+            # Net Change = Earned - Redeemed
+            net_points_change = points_earned - points_redeemed
+            
+            c.execute('UPDATE customers SET loyalty_points = loyalty_points + ? WHERE id = ?', (net_points_change, customer_id))
             
         conn.commit()
-        return transaction_id # Return ID instead of True
+        return txn_hash 
     except Exception as e:
         print(f"Transaction Error: {e}")
         conn.rollback()
