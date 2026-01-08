@@ -20,7 +20,7 @@ if "authenticated" not in st.session_state:
 
 # --- AUTHENTICATION FLOW ---
 if not st.session_state["authenticated"]:
-    # Custom CSS for Premium Split-Screen Landing Page
+    # --- CUSTOM CSS: PREMIUM SPLIT-SCREEN ---
     st.markdown("""
         <style>
         /* --- MUST BE FIRST --- */
@@ -31,86 +31,137 @@ if not st.session_state["authenticated"]:
         [data-testid="stHeader"] { visibility: hidden; }
         
         html, body, [class*="css"] {
-            font-family: 'Plus Jakarta Sans', sans-serif;
+            font-family: 'Arial', 'Helvetica', sans-serif; /* Corporate Sans */
             background-color: #ffffff;
         }
 
         /* --- REMOVE STREAMLIT PADDING --- */
         div.block-container {
             padding: 0 !important;
+            padding-top: 0 !important;
             margin: 0 !important;
             max-width: 100% !important;
+            min-height: 100vh;
         }
+        
+        /* Remove top header decoration */
+        header[data-testid="stHeader"] {
+            display: none !important;
+        }
+        
         div[data-testid="stAppViewContainer"] {
-            overflow: hidden;
-            height: 100vh;
+            overflow: auto; /* Allow scrolling if content is tall */
+            height: 100vh; /* Base height */
+            background: transparent !important;
+            box-shadow: none !important;
+            padding: 0 !important;
+            margin: 0 !important;
+        }
+        
+        /* Force root containers to have no spacing */
+        div[class*="stApp"] {
+            margin: 0 !important;
+            padding: 0 !important;
         }
 
         /* --- SPLIT LAYOUT GRID --- */
         [data-testid="stHorizontalBlock"] {
             gap: 0 !important;
-            height: 100vh;
-            min-height: 100vh;
+            min-height: 100vh; /* Grow with content */
+            height: auto;
             align-items: stretch;
+            padding-top: 0 !important;
+        }
+
+        /* --- INTERNAL SPACING RESET --- */
+        [data-testid="stVerticalBlock"] {
+            gap: 0 !important;
+            padding-top: 0 !important;
         }
         
-        /* --- COLUMN 1: LEFT PANEL (DARK) --- */
+        /* --- COLUMN 1: LEFT PANEL (SABIC THEME) --- */
         div[data-testid="stColumn"]:nth-of-type(1) {
-            background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
+            padding-top: 0 !important;
+            /* Official SABIC Palette Gradient: White to Very Light Grey */
+            background: linear-gradient(135deg, #FFFFFF 0%, #E6E7E8 100%);
             display: flex;
             flex-direction: column;
             justify-content: center;
             align-items: center;
             position: relative;
-            padding: 2rem;
-            height: 100%; /* Force Full Height */
+            padding: 2rem; /* Internal content padding - not top offset */
+            min-height: 100vh; 
+            height: auto;
+        }
+
+        /* Ensure inner blocks respect height for centering */
+        div[data-testid="stColumn"]:nth-of-type(1) > div {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            width: 100%;
         }
         
-        /* Pattern Overlay for Col 1 */
+        /* Pattern Overlay for Col 1 (Subtle for Light Mode) */
         div[data-testid="stColumn"]:nth-of-type(1)::before {
             content: "";
             position: absolute;
             top: 0; left: 0; right: 0; bottom: 0;
-            background-image: radial-gradient(#334155 1px, transparent 1px);
+            background-image: radial-gradient(#cbd5e1 1px, transparent 1px); /* Darker dots */
             background-size: 40px 40px;
-            opacity: 0.15;
+            opacity: 0.3;
             z-index: 0;
             pointer-events: none;
         }
         
         /* --- COLUMN 2: RIGHT PANEL (LIGHT) --- */
+        /* --- COLUMN 2: RIGHT PANEL (LIGHT) --- */
         div[data-testid="stColumn"]:nth-of-type(2) {
+            padding-top: 0 !important; /* Remove Streamlit default 64px */
             background-color: #ffffff;
             display: flex;
             flex-direction: column;
-            justify-content: center; /* Vertical Center */
-            padding: 4rem;
-            height: 100%; /* Force Full Height */
+            justify-content: center !important; /* Force Vertical Center */
+            padding: 4rem; /* Content padding */
+            min-height: 100vh; /* Ensure it covers full height */
+            height: auto;
+        }
+        
+        /* Ensure inner blocks respect height */
+        div[data-testid="stColumn"]:nth-of-type(2) > div {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
         }
 
         /* --- CONTENT STYLING --- */
         .brand-content {
             z-index: 10;
             text-align: center;
-            color: white;
-            max-width: 85%;
-            margin-top: -5vh; /* Visual correction to appear perfectly centered */
+            color: #0f172a; /* Inverted to Dark */
+            max-width: 100%; /* Removed 85% constraint to allow large logo */
+            /* Removed negative margin for strict centering */
         }
 
         .brand-logo-img {
-            margin-bottom: -5rem; 
-            width: clamp(350px, 45vw, 500px); /* LARGER BASE SIZE */
+            margin-bottom: -90px;
+            width: 450px !important; /* FORCED OVERRIDE */
+            max-width: none !important;
+            height: auto !important;
             display: block; 
             margin-left: auto;
             margin-right: auto;
         }
 
         .brand-title {
-            font-size: clamp(4rem, 8vw, 6.5rem); /* SIGNIFICANTLY LARGER */
-            font-weight: 800;
-            letter-spacing: -2px;
+            font-size: 4rem; 
+            font-weight: 700; 
+            letter-spacing: -1px; 
             margin-bottom: 0.5rem;
-            color: #ffffff; 
+            color: #009FDF; /* Theme Primary Blue */
             background: none;
             -webkit-text-fill-color: initial;
             position: relative; 
@@ -119,88 +170,105 @@ if not st.session_state["authenticated"]:
         }
 
         .brand-tagline {
-            font-size: clamp(1.1rem, 1.5vw, 1.8rem);
+            font-size: 1.1rem;
             font-weight: 700;
-            color: #fbbf24;
-            letter-spacing: 6px; /* More spacing for luxury feel */
+            color: #E35205; /* Theme Accent Orange */
+            letter-spacing: 2px;
             text-transform: uppercase;
             margin-bottom: 2rem;
-            opacity: 0.95;
+            opacity: 1;
         }
 
         .brand-desc {
-            font-size: clamp(1.2rem, 1.5vw, 1.6rem); /* Larger Body Text */
-            color: #f1f5f9; /* Near White for better contrast */
-            font-weight: 400; /* Regular weight instead of light */
+            font-size: 1.1rem;
+            color: #4D4D4D; /* SABIC Dark Grey Text */
+            font-weight: 500; 
             line-height: 1.6;
+            max-width: 600px;
+            margin: auto;
         }
         
         /* Auth Card Area */
         .auth-card {
             width: 100%;
-            max-width: 500px; /* Wider card */
+            max-width: 480px; /* Slightly narrower for focus */
             margin: auto; 
             padding: 1rem;
         }
         
         /* Auth Headings */
         .auth-header {
-            font-size: clamp(2.5rem, 4vw, 3.5rem); /* MUCH LARGER WELCOME */
+            font-size: 3rem; /* Still large but balanced */
             font-weight: 800;
-            color: #0f172a;
+            color: #4D4D4D; /* SABIC Dark Grey */
             margin-bottom: 0.5rem;
             line-height: 1.2;
         }
         .auth-sub {
-            font-size: clamp(1rem, 1.2vw, 1.3rem);
+            font-size: 1.1rem;
             color: #64748b;
             margin-top: -5px;
-            margin-bottom: 2.5rem;
+            margin-bottom: 3rem; /* More gap */
         }
 
         /* Components overrides */
         div.stButton > button {
-            background: #0f172a !important;
+            background: #009FDF !important; /* SABIC Primary Blue */
             color: white !important;
-            border-radius: 12px; /* Softer corners */
-            height: 4rem; /* Taller button */
-            font-size: 1.2rem !important;
+            border-radius: 0px; /* SHARP CORNERS */
+            height: 3.5rem; 
+            font-size: 1.1rem !important;
             font-weight: 700;
             letter-spacing: 0.5px;
             width: 100%;
             margin-top: 1.5rem;
             transition: all 0.2s;
+            border: none;
         }
         div.stButton > button:hover {
-            background: #1e293b !important;
-            transform: translateY(-2px);
-            box-shadow: 0 10px 20px -10px rgba(15, 23, 42, 0.5);
+            background: #041E42 !important; /* SABIC Navy for Hover */
+            transform: none; 
+            box-shadow: none; 
         }
 
+        /* UI DESIGNER: Corporate Accent Style */
         div[data-testid="stTextInput"] input {
-            background-color: #f8fafc !important;
-            border: 2px solid #e2e8f0 !important; /* Thicker border */
-            padding: 1.2rem;
-            border-radius: 12px;
-            color: #0f172a !important;
-            font-size: 1.1rem;
+            background-color: #F8FAFC !important; /* Subtle Slate for distinction */
+            border: 1px solid #CBD5E1 !important; /* Clean light border */
+            border-left: 5px solid #009FDF !important; /* SIGNATURE ACCENT: Primary Blue */
+            padding: 12px 16px;
+            border-radius: 2px; /* Minimal radius, almost sharp but smooth */
+            color: #1E293B !important; /* Deep Slate Text */
+            font-size: 1rem;
+            font-weight: 500;
+            height: 50px; 
             margin-bottom: 0.5rem;
+            transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+            box-shadow: 0 1px 2px rgba(0,0,0,0.05) !important;
+        }
+        
+        div[data-testid="stTextInput"] input:focus {
+            background-color: #FFFFFF !important;
+            border-color: #009FDF !important;
+            box-shadow: 0 4px 12px rgba(0, 159, 223, 0.15) !important; /* Elegant Glow */
+            transform: translateY(-1px); /* Micro-interaction lift */
         }
         div[data-testid="stTextInput"] input:focus {
             background-color: white !important;
-            border-color: #0f172a !important;
-            box-shadow: 0 0 0 4px rgba(15, 23, 42, 0.1);
+            border-color: #009FDF !important; /* SABIC Blue Focus */
+            box-shadow: none;
         }
         div[data-testid="stTextInput"] label {
-            font-size: 1rem !important;
+            font-size: 0.9rem !important;
             font-weight: 600 !important;
-            color: #334155 !important;
+            color: #4D4D4D !important; /* SABIC Dark Grey */
+            margin-bottom: 0.2rem;
         }
         
         div.stTabs [data-baseweb="tab"] {
-            font-size: 1.2rem;
+            font-size: 1rem;
             font-weight: 600;
-            padding-bottom: 1rem;
+            padding-bottom: 0.8rem;
         }
         </style>
     """, unsafe_allow_html=True)
@@ -216,7 +284,7 @@ if not st.session_state["authenticated"]:
             import base64
             with open(logo_file, "rb") as f:
                 data = base64.b64encode(f.read()).decode("utf-8")
-            logo_html = f'<img src="data:image/svg+xml;base64,{data}" class="brand-logo-img">'
+            logo_html = f'<img src="data:image/svg+xml;base64,{data}" class="brand-logo-img" style="width: 450px; max-width: none; margin-bottom: -90px;">'
         except:
             logo_html = '<h1 style="font-size: 5rem;">🧠</h1>'
 
@@ -224,7 +292,7 @@ if not st.session_state["authenticated"]:
         st.markdown(f"""
             <div class="brand-content">
                 {logo_html}
-                <div class="brand-title">Vyapar<span style="color: #fbbf24">Mind</span></div>
+                <div class="brand-title">Vyapar<span style="color: #FFCD00">Mind</span></div>
                 <div class="brand-tagline">Growth • Purity • Success</div>
                 <p class="brand-desc">
                     The intelligent operating system for modern business.<br>
