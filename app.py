@@ -6,7 +6,8 @@ import pandas as pd
 st.set_page_config(
     page_title="VyaparMind",
     page_icon="🧠",
-    layout="wide"
+    layout="wide",
+    initial_sidebar_state="collapsed"
 )
 
 import ui_components as ui
@@ -27,7 +28,7 @@ if not st.session_state["authenticated"]:
         @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap');
         
         /* --- GLOBAL RESETS --- */
-        [data-testid="stSidebar"] { display: none; }
+        [data-testid="stSidebar"] { display: none; } /* HIDDEN on Login Page */
         [data-testid="stHeader"] { visibility: hidden; }
         
         html, body, [class*="css"] {
@@ -270,6 +271,68 @@ if not st.session_state["authenticated"]:
             font-weight: 600;
             padding-bottom: 0.8rem;
         }
+
+        /* --- MOTION GRAPHICS ENGINE: FINAL MIX (Bloom + Flow) --- */
+        
+        /* 1. BLOOM KEYFRAMES (Intro) */
+        @keyframes organic-bloom-center { 0% { transform: scaleY(0); opacity: 0; } 100% { transform: scaleY(1); opacity: 1; } }
+        @keyframes organic-bloom-side { 0% { transform: scale(0) rotate(0deg); opacity: 0; } 100% { transform: scale(1) rotate(0deg); opacity: 1; } }
+        @keyframes organic-pulse { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.05); } }
+
+        /* 2. FLOW KEYFRAMES (Loop) - Must include scale(1) to maintain Bloom state */
+        @keyframes organic-flow-left { 
+            0%, 100% { transform: scale(1) rotate(0deg); } 
+            50% { transform: scale(1) rotate(-3deg); } 
+        }
+        @keyframes organic-flow-right { 
+            0%, 100% { transform: scale(1) rotate(0deg); } 
+            50% { transform: scale(1) rotate(3deg); } 
+        }
+        @keyframes organic-flow-center { 
+            0%, 100% { transform: scale(1) skewX(0deg); } 
+            50% { transform: scale(1) skewX(2deg); } 
+        }
+
+        /* 3. CHAINED ANIMATIONS */
+        .motion-FinalMix .petal-center { 
+            animation: 
+                organic-bloom-center 1s ease-out forwards, 
+                organic-flow-center 4s ease-in-out 1s infinite; /* Flow starts after 1s */
+            transform-origin: bottom center;
+        }
+        .motion-FinalMix .petal-left { 
+            animation: 
+                organic-bloom-side 1s ease-out 0.2s forwards, 
+                organic-flow-left 3s ease-in-out 1.2s infinite; /* Flow starts after 1.2s */
+            opacity: 0; /* Hidden initially for delay */
+            transform-origin: bottom right;
+        }
+        .motion-FinalMix .petal-right { 
+            animation: 
+                organic-bloom-side 1s ease-out 0.3s forwards, 
+                organic-flow-right 3.2s ease-in-out 1.3s infinite; /* Flow starts after 1.3s */
+            opacity: 0; /* Hidden initially for delay */
+            transform-origin: bottom left;
+        }
+        .motion-FinalMix .logo-core { 
+            animation: organic-pulse 3s infinite ease-in-out 1.5s; 
+            transform-box: fill-box; 
+        }
+
+        /* General Container Float */
+        .brand-logo-container svg {
+            width: 450px !important;
+            height: auto;
+            display: block;
+            margin: auto;
+            /* Constant float for the whole container */
+            animation: hover-float 4s ease-in-out infinite alternate;
+        }
+        @keyframes hover-float {
+            0% { transform: translateY(0px); }
+            50% { transform: translateY(-8px); }
+            100% { transform: translateY(0px); }
+        }
         </style>
     """, unsafe_allow_html=True)
     
@@ -281,10 +344,14 @@ if not st.session_state["authenticated"]:
         try:
             logo_choice = db.get_setting('app_logo') or "Ascending Lotus"
             logo_file = "logo_no_text_3.svg" if logo_choice == "Ascending Lotus" else "logo_no_text_1.svg"
-            import base64
-            with open(logo_file, "rb") as f:
-                data = base64.b64encode(f.read()).decode("utf-8")
-            logo_html = f'<img src="data:image/svg+xml;base64,{data}" class="brand-logo-img" style="width: 450px; max-width: none; margin-bottom: -90px;">'
+            
+            # MOTION GRAPHICS: Final Mix (Bloom + Flow)
+            motion_class = "motion-FinalMix"
+            
+            # Inject Inline SVG
+            with open(logo_file, "r") as f:
+                svg_content = f.read().replace('\n', '').replace('\r', '')
+            logo_html = f'<div class="brand-logo-container {motion_class}" style="margin-bottom: -90px;">{svg_content}</div>'
         except:
             logo_html = '<h1 style="font-size: 5rem;">🧠</h1>'
 

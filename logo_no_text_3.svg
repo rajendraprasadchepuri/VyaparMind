@@ -17,14 +17,14 @@
   
   <g transform="translate(100, 110)"> <!-- Adjusted center Y to account for upward curves -->
     <!-- Central Petal (High Growth) - SABIC Blue -->
-    <path d="M0 20 Q-25 -40 0 -90 Q25 -40 0 20" fill="#009FDF" />
+    <path class="petal-center" d="M0 20 Q-25 -40 0 -90 Q25 -40 0 20" fill="#009FDF" style="transform-origin: 0px 20px;" />
     
     <!-- Side Petals (Support) - SABIC Yellow -->
-    <path d="M0 20 Q-50 0 -60 -50 Q-20 -20 0 20" fill="#FFCD00" />
-    <path d="M0 20 Q50 0 60 -50 Q20 -20 0 20" fill="#FFCD00" />
+    <path class="petal-left" d="M0 20 Q-50 0 -60 -50 Q-20 -20 0 20" fill="#FFCD00" style="transform-origin: 0px 20px;" />
+    <path class="petal-right" d="M0 20 Q50 0 60 -50 Q20 -20 0 20" fill="#FFCD00" style="transform-origin: 0px 20px;" />
     
     <!-- Core/Base Dot - SABIC Blue with Yellow Rim -->
     <!-- STRICT Two Colors: Core is Blue, Rim is Yellow -->
-    <circle cx="0" cy="20" r="12" fill="#009FDF" stroke="#FFCD00" stroke-width="2"/>
+    <circle class="logo-core" cx="0" cy="20" r="12" fill="#009FDF" stroke="#FFCD00" stroke-width="2" style="transform-origin: 0px 20px;" />
   </g>
 </svg>
