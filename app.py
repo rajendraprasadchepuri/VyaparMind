@@ -342,7 +342,6 @@ if not st.session_state["authenticated"]:
     with col1:
         # Prepare logo
         try:
-        try:
             # FORCE FIXED LOGO: "logo_no_text_3.svg" (Product Logo)
             logo_file = "logo_no_text_3.svg" 
             
