@@ -6,7 +6,7 @@ import streamlit as st
 DB_NAME = "retail_supply_chain.db"
 
 def get_connection():
-    return sqlite3.connect(DB_NAME)
+    return sqlite3.connect(DB_NAME, timeout=30, check_same_thread=False)
 
 def init_db():
     """Initializes the database with necessary tables if they don't exist."""
@@ -151,6 +151,13 @@ def init_db():
     except:
         c.execute("ALTER TABLE customers ADD COLUMN city TEXT DEFAULT 'Unknown'")
         c.execute("ALTER TABLE customers ADD COLUMN pincode TEXT DEFAULT '000000'")
+
+    # Check for science_tags in products (Migration Phase 3)
+    try:
+        c.execute("SELECT science_tags FROM products LIMIT 1")
+    except:
+        c.execute("ALTER TABLE products ADD COLUMN science_tags TEXT")
+
     
     # product_batches(expiry_date) for FreshFlow
     c.execute("CREATE INDEX IF NOT EXISTS idx_batches_expiry ON product_batches(expiry_date)")
@@ -208,6 +215,32 @@ def init_db():
             slot TEXT, -- Morning, Evening
             staff_id INTEGER,
             FOREIGN KEY (staff_id) REFERENCES staff (id)
+        )
+    ''')
+
+    # StockSwap Table (B2B)
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS b2b_deals (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            store_name TEXT, -- In real app, this is linked to Store ID
+            product_name TEXT,
+            quantity INTEGER,
+            price_per_unit REAL,
+            acc_phone TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+    
+    # CrowdStock Table
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS crowd_campaigns (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            item_name TEXT,
+            description TEXT,
+            votes_needed INTEGER,
+            votes_current INTEGER DEFAULT 0,
+            price_est REAL,
+            status TEXT DEFAULT 'ACTIVE' -- ACTIVE, FUNDED, CLOSED
         )
     ''')
 
@@ -725,6 +758,7 @@ def verify_user(username, password):
                 return True, "Login successful."
         
         return False, "Invalid username or password."
+    except Exception as e:
         return False, str(e)
     finally:
         conn.close()
@@ -771,3 +805,66 @@ def get_geo_revenue():
     df = pd.read_sql_query(query, conn)
     conn.close()
     return df
+
+# --- STOCKSWAP LOGIC ---
+
+def create_b2b_deal(store, product, qty, price, phone):
+    conn = get_connection()
+    c = conn.cursor()
+    try:
+        c.execute("INSERT INTO b2b_deals (store_name, product_name, quantity, price_per_unit, acc_phone) VALUES (?, ?, ?, ?, ?)", 
+                  (store, product, qty, price, phone))
+        conn.commit()
+        return True, "Deal Broadcasted!"
+    except Exception as e:
+        return False, str(e)
+    finally:
+        conn.close()
+
+def get_b2b_deals():
+    conn = get_connection()
+    df = pd.read_sql_query("SELECT * FROM b2b_deals ORDER BY created_at DESC", conn)
+    conn.close()
+    return df
+
+# --- CROWDSTOCK LOGIC ---
+
+def create_campaign(item, desc, votes, price):
+    conn = get_connection()
+    c = conn.cursor()
+    try:
+        c.execute("INSERT INTO crowd_campaigns (item_name, description, votes_needed, price_est) VALUES (?, ?, ?, ?)", 
+                  (item, desc, votes, price))
+        conn.commit()
+        return True, "Campaign Started!"
+    except Exception as e:
+        return False, str(e)
+    finally:
+        conn.close()
+
+def get_campaigns():
+    conn = get_connection()
+    df = pd.read_sql_query("SELECT * FROM crowd_campaigns WHERE status='ACTIVE'", conn)
+    conn.close()
+    return df
+
+def vote_campaign(camp_id):
+    conn = get_connection()
+    c = conn.cursor()
+    try:
+        c.execute("UPDATE crowd_campaigns SET votes_current = votes_current + 1 WHERE id = ?", (camp_id,))
+        # Check if funded
+        c.execute("SELECT votes_needed, votes_current FROM crowd_campaigns WHERE id = ?", (camp_id,))
+        row = c.fetchone()
+        if row and row[1] >= row[0]:
+            c.execute("UPDATE crowd_campaigns SET status = 'FUNDED' WHERE id = ?", (camp_id,))
+            msg = "Vote Registered! 🚀 CAMPAIGN FUNDED!"
+        else:
+            msg = "Vote Registered!"
+            
+        conn.commit()
+        return True, msg
+    except Exception as e:
+        return False, str(e)
+    finally:
+        conn.close()
