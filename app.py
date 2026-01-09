@@ -342,8 +342,9 @@ if not st.session_state["authenticated"]:
     with col1:
         # Prepare logo
         try:
-            logo_choice = db.get_setting('app_logo') or "Ascending Lotus"
-            logo_file = "logo_no_text_3.svg" if logo_choice == "Ascending Lotus" else "logo_no_text_1.svg"
+        try:
+            # FORCE FIXED LOGO: "logo_no_text_3.svg" (Product Logo)
+            logo_file = "logo_no_text_3.svg" 
             
             # MOTION GRAPHICS: Final Mix (Bloom + Flow)
             motion_class = "motion-FinalMix"
