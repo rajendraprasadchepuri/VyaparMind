@@ -414,12 +414,11 @@ if not st.session_state["authenticated"]:
         st.markdown('</div>', unsafe_allow_html=True)
 
 else:
+
     # --- MAIN APPLICATION ---
-    # Show Sidebar with Logout
+    # Show Sidebar
     ui.render_sidebar()
-    if st.sidebar.button("Logout", type="primary"):
-        st.session_state["authenticated"] = False
-        st.rerun()
+    ui.render_top_header()
 
     # Main Page Content
     st.title("🧠 VyaparMind: Intelligent Retail")

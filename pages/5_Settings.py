@@ -3,6 +3,8 @@ import database as db
 import ui_components as ui
 
 st.set_page_config(page_title="Settings", layout="wide")
+ui.require_auth()
+ui.render_top_header()
 st.title("⚙️ Store Settings")
 
 ui.render_sidebar()

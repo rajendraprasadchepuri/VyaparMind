@@ -6,6 +6,8 @@ from datetime import datetime
 import ui_components as ui
 
 st.set_page_config(page_title="VyaparMind Analytics", layout="wide")
+ui.require_auth()
+ui.render_top_header()
 st.title("📊 VyaparMind Insight")
 
 ui.render_sidebar()

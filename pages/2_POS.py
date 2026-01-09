@@ -6,13 +6,19 @@ import textwrap
 import ui_components as ui
 
 st.set_page_config(page_title="VyaparMind POS", layout="wide")
+ui.require_auth()
+ui.render_top_header()
 st.title("💳 VyaparMind POS")
 
 ui.render_sidebar()
 
+
 # Initialize Cart in Session State
 if 'cart' not in st.session_state:
     st.session_state.cart = []
+
+if 'held_bills' not in st.session_state:
+    st.session_state['held_bills'] = []
 
 def add_to_cart(product_id, name, price, cost, stock, qty, tax_rate=0.0):
     # Check total quantity currently in cart for this product
@@ -44,6 +50,26 @@ def add_to_cart(product_id, name, price, cost, stock, qty, tax_rate=0.0):
 def clear_cart():
     st.session_state.cart = []
 
+def hold_current_bill(cust_phone=None):
+    if not st.session_state.cart:
+        st.warning("Cart is empty!")
+        return
+    
+    from datetime import datetime
+    bill_data = {
+        'id': datetime.now().strftime('%H:%M:%S'),
+        'timestamp': datetime.now(),
+        'cart': st.session_state.cart,
+        'total': sum(i['total'] for i in st.session_state.cart),
+        'customer_phone': cust_phone
+    }
+    st.session_state['held_bills'].append(bill_data)
+    st.session_state.cart = []
+    if 'last_invoice' in st.session_state:
+        del st.session_state['last_invoice']
+    st.toast("Bill Held Successfully! ⏸️")
+    st.rerun()
+
 # --- Customer Selection (Main Page) ---
 selected_customer_id = None
 st.write(" ") # Spacer
@@ -52,7 +78,7 @@ with st.expander("👤 Customer Details (Optional)", expanded=True):
     # 1. Search by Phone
     c_s1, c_s2 = st.columns([1, 2])
     with c_s1:
-        phone_input = st.text_input("Enter Customer Phone", placeholder="e.g. 9876543210")
+        phone_input = st.text_input("Enter Customer Phone", placeholder="e.g. 9876543210", key="pos_cust_phone")
     
     with c_s2:
         st.write("") # Spacer to align with text_input label
@@ -136,6 +162,44 @@ with col_products:
 
 # Right Column Start
 with col_cart:
+    # --- HELD BILLS SECTION ---
+    if st.session_state['held_bills']:
+        with st.expander(f"⏸️ Held Transactions ({len(st.session_state['held_bills'])})", expanded=False):
+            for idx, bill in enumerate(st.session_state['held_bills']):
+                c1, c2, c3, c4 = st.columns([1.5, 1.5, 1, 1])
+                cust_label = f" | 📞 {bill['customer_phone']}" if bill.get('customer_phone') else ""
+                c1.caption(f"🕒 {bill['id']}{cust_label}")
+                c2.caption(f"Items: {len(bill['cart'])} | ₹{bill['total']:.0f}")
+                
+                if c3.button("Resume", key=f"resume_{idx}", use_container_width=True):
+                    # Auto-hold current if exists
+                    if st.session_state.cart:
+                         from datetime import datetime
+                         current_hold = {
+                            'id': datetime.now().strftime('%H:%M:%S'),
+                            'timestamp': datetime.now(),
+                            'cart': st.session_state.cart,
+                            'total': sum(i['total'] for i in st.session_state.cart),
+                            'customer_phone': st.session_state.get('pos_cust_phone')
+                         }
+                         st.session_state['held_bills'].append(current_hold)
+                         st.toast("Auto-held current bill.")
+                    
+                    st.session_state.cart = bill['cart']
+                    # Restore customer phone if exists
+                    if bill.get('customer_phone'):
+                        st.session_state['pos_cust_phone'] = bill['customer_phone']
+                    
+                    st.session_state['held_bills'].pop(idx)
+                    if 'last_invoice' in st.session_state:
+                        del st.session_state['last_invoice']
+                    st.rerun()
+                    
+                if c4.button("❌", key=f"discard_{idx}", help="Discard Hold"):
+                    st.session_state['held_bills'].pop(idx)
+                    st.rerun()
+            st.divider()
+
     st.subheader("🛒 Current Cart")
     
     if st.session_state.cart:
@@ -304,67 +368,80 @@ with col_cart:
                 if points_to_redeem > 0:
                     redemption_html = f"<p style='text-align: right; font-size: 12px; color: green;'>Points Redeemed: -₹{points_to_redeem:.2f}</p>"
                 
-                invoice_html = textwrap.dedent(f"""
-                <div style="border: 1px solid #ccc; padding: 20px; width: 450px; font-family: 'Courier New', monospace; background: white; color: black; box-sizing: border-box; overflow-x: hidden;">
-                    {logo_html}
-                    <h3 style="text-align: center; margin: 0;">{store_name}</h3>
-                    <p style="text-align: center; font-size: 12px; margin-bottom: 5px;">{store_addr}</p>
-                    {phone_line}
-                    {gst_line}
-                    <hr>
-                    <p><strong>Receipt #:</strong> {txn_id}<br><strong>Date:</strong> {date_str}</p>
-                    {cust_info}
-                    <hr>
-                    <table style="width: 100%; font-size: 12px; border-collapse: collapse;">
-                        <tr style="border-bottom: 1px dashed black;">
-                            <th style="text-align: left;">Item</th>
-                            <th style="text-align: right;">Qty</th>
-                            <th style="text-align: right;">Rate</th>
-                            <th style="text-align: right;">Tax</th>
-                            <th style="text-align: right;">Amt</th>
-                        </tr>
-                        {items_html}
-                    </table>
-                    <hr>
-                    <p style="text-align: right; font-size: 12px;">Subtotal: ₹{total_amount_disp:.2f}</p>
-                    <p style="text-align: right; font-size: 12px;">CGST (50%): ₹{cgst_disp:.2f}</p>
-                    <p style="text-align: right; font-size: 12px;">SGST (50%): ₹{sgst_disp:.2f}</p>
-                    <p style="text-align: right; font-size: 16px;"><strong>TOTAL: ₹{grand_total_disp:.2f}</strong></p>
-                    {redemption_html}
-                    <p style="text-align: right; font-size: 18px; border-top: 1px solid black; margin-top: 5px; padding-top: 5px;"><strong>NET PAYABLE: ₹{final_payable_disp:.2f}</strong></p>
-                    <hr>
-                    <p style="text-align: center; font-size: 10px;">{footer_msg}</p>
-                </div>
-                """)
+                # --- REVERTED TO ORIGINAL STYLE WITH RESPONSIVE WIDTH FIX ---
+                # Changed width: 450px to width: 100%; max-width: 450px;
+                # FLATTENED HTML TO PREVENT MARKDOWN CODE BLOCK RENDERING
+                invoice_html = f"""
+<div style="border: 1px solid #ccc; padding: 20px; width: 100%; max-width: 450px; font-family: 'Courier New', monospace; background: white; color: black; box-sizing: border-box; overflow-x: hidden; margin: auto;">
+{logo_html}
+<h3 style="text-align: center; margin: 0;">{store_name}</h3>
+<p style="text-align: center; font-size: 12px; margin-bottom: 5px;">{store_addr}</p>
+{phone_line}
+{gst_line}
+<hr>
+<p><strong>Receipt #:</strong> {txn_id}<br><strong>Date:</strong> {date_str}</p>
+{cust_info}
+<hr>
+<table style="width: 100%; font-size: 12px; border-collapse: collapse;">
+<tr style="border-bottom: 1px dashed black;">
+<th style="text-align: left;">Item</th>
+<th style="text-align: right;">Qty</th>
+<th style="text-align: right;">Rate</th>
+<th style="text-align: right;">Tax</th>
+<th style="text-align: right;">Amt</th>
+</tr>
+{items_html}
+</table>
+<hr>
+<p style="text-align: right; font-size: 12px;">Subtotal: ₹{total_amount_disp:.2f}</p>
+<p style="text-align: right; font-size: 12px;">CGST (50%): ₹{cgst_disp:.2f}</p>
+<p style="text-align: right; font-size: 12px;">SGST (50%): ₹{sgst_disp:.2f}</p>
+<p style="text-align: right; font-size: 16px;"><strong>TOTAL: ₹{grand_total_disp:.2f}</strong></p>
+{redemption_html}
+<p style="text-align: right; font-size: 18px; border-top: 1px solid black; margin-top: 5px; padding-top: 5px;"><strong>NET PAYABLE: ₹{final_payable_disp:.2f}</strong></p>
+<hr>
+<p style="text-align: center; font-size: 10px;">{footer_msg}</p>
+</div>
+"""
                 
                 st.session_state['last_invoice'] = invoice_html
-                st.session_state['cart'] = [] 
+                # Cart retained for review until "Close Bill" or explicit "Clear Cart"
                 st.rerun()
     
-    # Show Last Invoice if exists
-    if 'last_invoice' in st.session_state and st.session_state['last_invoice']:
-        with st.expander("📄 Last Bill / Print", expanded=True):
-            st.markdown(st.session_state['last_invoice'], unsafe_allow_html=True)
-            st.markdown("""
-            <button onclick="window.print()">🖨️ Print Receipt</button>
-            <script>
-            function printReceipt() {
-                var printContents = document.querySelector('.element-container:has(h3)').innerHTML;
-                var originalContents = document.body.innerHTML;
-                document.body.innerHTML = printContents;
-                window.print();
-                document.body.innerHTML = originalContents;
-            }
-            </script>
-            """, unsafe_allow_html=True)
-            
-            if st.button("Close Bill"):
-                del st.session_state['last_invoice']
+        # --- Hold / Clear Buttons (Visible if cart not empty) ---
+        c_hold, c_clear = st.columns(2)
+        with c_hold:
+            if st.button("Hold Bill ⏸️", help="Save transaction and clear cart", use_container_width=True):
+                hold_current_bill(phone_input)
+        
+        with c_clear:
+            if st.button("Clear Cart 🗑️", type="primary", use_container_width=True):
+                clear_cart()
+                if 'last_invoice' in st.session_state:
+                    del st.session_state['last_invoice']
                 st.rerun()
+
+        # Show Last Invoice if exists
+        if 'last_invoice' in st.session_state and st.session_state['last_invoice']:
+            with st.expander("📄 Last Bill / Print", expanded=True):
+                st.markdown(st.session_state['last_invoice'], unsafe_allow_html=True)
+                st.markdown("""
+                <button onclick="window.print()">🖨️ Print Receipt</button>
+                <script>
+                function printReceipt() {
+                    var printContents = document.querySelector('.element-container:has(h3)').innerHTML;
+                    var originalContents = document.body.innerHTML;
+                    document.body.innerHTML = printContents;
+                    window.print();
+                    document.body.innerHTML = originalContents;
+                }
+                </script>
+                """, unsafe_allow_html=True)
                 
-        if st.button("Clear Cart 🗑️", use_container_width=True):
-            clear_cart()
-            st.rerun()
+                if st.button("Close Bill", type="primary"):
+                    clear_cart() # Clear cart/transaction on close
+                    del st.session_state['last_invoice']
+                    st.rerun()
             
     else:
         st.info("Cart is empty.")

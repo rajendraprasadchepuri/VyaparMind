@@ -7,6 +7,8 @@ from datetime import timedelta
 import ui_components as ui
 
 st.set_page_config(page_title="VyaparMind AI", layout="wide")
+ui.require_auth()
+ui.render_top_header()
 st.title("🧠 VyaparMind Intelligence")
 
 ui.render_sidebar()
