@@ -180,36 +180,58 @@ def render_top_header():
        MUST BE CALLED BEFORE st.title()"""
     if st.session_state.get("authenticated", False):
         
-        # CSS to reduce top padding so header sits high
+        # REVERTED FLOAT: Back to standard flow but optimized spacing
         st.markdown("""
             <style>
+                /* Reduce top padding slightly, but keep enough for aesthetics */
                 .block-container {
-                    padding-top: 1rem !important; 
+                    padding-top: 2rem !important; 
                 }
+                
+                /* Ensure Header Container has proper spacing */
+                div[data-testid="stHorizontalBlock"]:nth-of-type(1) {
+                    margin-bottom: 1rem !important; /* Positive margin to prevent overlap */
+                    align-items: center;
+                }
+                
+                /* Username styling */
+                #user-label {
+                    text-align: right; 
+                    white-space: nowrap; 
+                    font-weight: 600; 
+                    color: #4D4D4D; 
+                    margin-right: 10px;
+                    padding-top: 4px;
+                }
+                
                 /* Compact Button */
                 div[data-testid="stButton"] button {
                     height: 2.2rem;
                     min-height: 2.2rem;
-                    padding-top: 0.2rem;
-                    padding-bottom: 0.2rem;
+                    padding: 0px 20px;
+                    border-radius: 4px;
+                    font-size: 0.9rem;
+                    font-weight: 600;
+                    box-shadow: none;
                 }
             </style>
         """, unsafe_allow_html=True)
 
-        # Uses columns to push content to the far right
-        # Spacing: [Spacer, User Label, Logout Button]
-        c_spacer, c_user, c_logout = st.columns([6, 2, 1])
+        # Uses columns to push content to the far right. 
+        # Ratios: Spacer (4), User Label (2.5), Logout Button (1)
+        # Relaxed spacer to ensure content has enough width to not clip
+        c_spacer, c_user, c_logout = st.columns([4, 2.5, 1], gap="small")
+
         
         with c_user:
-            username = st.session_state.get('username', 'Admin User') 
-            # Right aligned text
-            st.markdown(f"<div style='text-align: right; white-space: nowrap; font-weight: 600; color: #4D4D4D; padding-top: 5px;'>👤 {username}</div>", unsafe_allow_html=True)
+            username = st.session_state.get('username')
+            if not username or str(username) == 'None':
+                username = 'Admin User'
+            st.markdown(f"<div id='user-label'>👤 {username}</div>", unsafe_allow_html=True)
             
         with c_logout:
             if st.button("Logout", key="top_logout_btn", type="primary", use_container_width=True):
                 st.session_state["authenticated"] = False
                 st.session_state["username"] = None
                 st.rerun()
-        
-        # No divider, keep it clean/tight
 

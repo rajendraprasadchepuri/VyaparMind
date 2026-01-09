@@ -389,6 +389,7 @@ if not st.session_state["authenticated"]:
                 success, msg = db.verify_user(login_user, login_pass)
                 if success:
                     st.session_state["authenticated"] = True
+                    st.session_state["username"] = login_user
                     st.success(msg)
                     st.rerun()
                 else:
