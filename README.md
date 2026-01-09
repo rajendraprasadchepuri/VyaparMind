@@ -28,7 +28,7 @@ VyaparMind is not just a POS. It is a complete **AI Operating System** for moder
 
 ### B. Intelligence (The Vision) 🔮
 
-5. **🌡️ IsoBar (Demand Sensing)**
+1. **🌡️ IsoBar (Demand Sensing)**
     * **Context-Aware**: Predicts sales based on Weather (Rain? Heatwave?) and Events (Cricket Match? Diwali?).
     * **Forecasting**: "If tomorrow is Rainy, stock 200% more Tea."
 
@@ -38,13 +38,49 @@ VyaparMind is not just a POS. It is a complete **AI Operating System** for moder
 
 ### C. Growth (The Heart) ❤️
 
-7. **🛡️ ChurnGuard (Retention Autopilot)**
+1. **🛡️ ChurnGuard (Retention Autopilot)**
     * **Ghost Detection**: Identifies VIPs who haven't visited in 30 days.
     * **Win-Back**: Auto-generates "We Miss You" offers to bring them back.
 
 2. **🗺️ GeoViz (Catchment Analysis)**
     * **Heatmaps**: Visualizes exactly which neighborhoods/cities your revenue comes from.
     * **Strategy**: Helps you decide where to market or open your next store.
+
+### D. Blue Ocean Innovations (The Edge) 🚀
+
+1. **🕸️ StockSwap (Retailer Mesh)**
+    * **Peer-to-Peer**: Exchange dead stock with other nearby retailers.
+    * **Efficiency**: Liquify your stuck inventory instead of writing it off.
+
+2. **🧬 ShelfSense (Science of Merchandising)**
+    * **Molecular Intelligence**: Knows that *Apples release Ethylene* and spoils *Bananas*.
+    * **Psychology**: Suggests placing impulse buys at eye level near checkout.
+
+3. **🔮 CrowdStock (Zero-Risk Inventory)**
+    * **Pre-Launch**: List new items (e.g., "Vegan Cheese") and stock only if 50 people vote for it.
+    * **No Risk**: Eliminate demand-side uncertainty.
+
+---
+
+## 🔐 Security & Enterprise Features
+
+* **RBAC (Role-Based Access Control)**:
+  * **Admin**: Full access.
+  * **Manager**: Operations & Reports.
+  * **Staff**: POS & VoiceAudit only.
+* **Subscription Tiers**:
+  * **Starter**: Core features (Free).
+  * **Business**: + FreshFlow, VendorTrust (₹999/mo).
+  * **Enterprise**: + AI Forecasting & Blue Ocean Modules (₹2999/mo).
+
+## 🧪 Simulation Data (Enterprise Demo)
+
+VyaparMind comes with a robust **Enterprise Simulator** script.
+
+* **`seed_enterprise.py`**: Injects **6 Months** of realistic data:
+  * **15,000+ Transactions** with seasonality.
+  * **1,000 Customers** across Hyderabad, Warangal, Karimnagar.
+  * **Realistic Chaos**: Expiring batches, late suppliers, and staffing rosters.
 
 ---
 
@@ -66,14 +102,23 @@ VyaparMind is not just a POS. It is a complete **AI Operating System** for moder
     pip install -r requirements.txt
     ```
 
-2. **Run**
+2. **Populate Data (Optional)**
+
+    This will inject 6 months of demo data.
+
+    ```bash
+    python seed_enterprise.py
+    ```
+
+3. **Run Application**
 
     ```bash
     streamlit run app.py
     ```
 
-3. **Login**
-    * Default: `admin` / `admin`
+4. **Login Credentials**
+    * **Admin**: `admin` / `admin` (Role: Admin)
+    * **Staff**: `sita` / [password from DB or create new]
 
 ---
 
