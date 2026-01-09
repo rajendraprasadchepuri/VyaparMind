@@ -8,10 +8,9 @@ import ui_components as ui
 
 st.set_page_config(page_title="VyaparMind AI", layout="wide")
 ui.require_auth()
+ui.render_sidebar()
 ui.render_top_header()
 st.title("🧠 VyaparMind Intelligence")
-
-ui.render_sidebar()
 
 conn = db.get_connection()
 transactions = pd.read_sql_query("SELECT * FROM transactions", conn)

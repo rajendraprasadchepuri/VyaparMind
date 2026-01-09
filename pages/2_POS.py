@@ -7,10 +7,9 @@ import ui_components as ui
 
 st.set_page_config(page_title="VyaparMind POS", layout="wide")
 ui.require_auth()
+ui.render_sidebar()
 ui.render_top_header()
 st.title("💳 VyaparMind POS")
-
-ui.render_sidebar()
 
 
 # Initialize Cart in Session State

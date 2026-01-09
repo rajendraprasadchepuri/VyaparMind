@@ -7,10 +7,9 @@ import ui_components as ui
 st.set_page_config(page_title="VyaparMind Inventory", layout="wide")
 
 ui.require_auth()
+ui.render_sidebar()
 ui.render_top_header()
 st.title("📦 VyaparMind Inventory")
-
-ui.render_sidebar()
 
 # --- Actions ---
 # --- Actions (Moved to Main Page) ---

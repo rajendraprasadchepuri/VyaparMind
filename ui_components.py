@@ -204,15 +204,16 @@ def render_top_header():
                     padding-top: 4px;
                 }
                 
-                /* Compact Button */
-                div[data-testid="stButton"] button {
-                    height: 2.2rem;
-                    min-height: 2.2rem;
-                    padding: 0px 20px;
-                    border-radius: 4px;
-                    font-size: 0.9rem;
-                    font-weight: 600;
-                    box-shadow: none;
+                /* Compact Button - Scoped to Header Block Only */
+                div[data-testid="stHorizontalBlock"]:nth-of-type(1) button {
+                    height: 2.2rem !important;
+                    min-height: 2.2rem !important;
+                    padding: 0px 20px !important;
+                    border-radius: 4px !important;
+                    font-size: 0.9rem !important;
+                    font-weight: 600 !important;
+                    box-shadow: none !important;
+                    line-height: normal !important; /* Ensure text creates 1 line */
                 }
             </style>
         """, unsafe_allow_html=True)
