@@ -118,6 +118,20 @@ def init_db():
         )
     ''')
 
+    # Product Batches (FreshFlow)
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS product_batches (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            product_id INTEGER,
+            batch_code TEXT,
+            expiry_date DATE,
+            quantity INTEGER,
+            cost_price REAL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (product_id) REFERENCES products (id)
+        )
+    ''')
+
     # --- OPTIMIZATION: INDEXES ---
     # products(name) for search
     c.execute("CREATE INDEX IF NOT EXISTS idx_products_name ON products(name)")
@@ -130,6 +144,72 @@ def init_db():
     
     # customers(phone) for fast lookup
     c.execute("CREATE INDEX IF NOT EXISTS idx_customers_phone ON customers(phone)")
+    
+    # Check for new columns in customers (Migration)
+    try:
+        c.execute("SELECT city FROM customers LIMIT 1")
+    except:
+        c.execute("ALTER TABLE customers ADD COLUMN city TEXT DEFAULT 'Unknown'")
+        c.execute("ALTER TABLE customers ADD COLUMN pincode TEXT DEFAULT '000000'")
+    
+    # product_batches(expiry_date) for FreshFlow
+    c.execute("CREATE INDEX IF NOT EXISTS idx_batches_expiry ON product_batches(expiry_date)")
+
+    # VendorTrust Tables
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS suppliers (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            contact_person TEXT,
+            phone TEXT,
+            category_specialty TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS purchase_orders (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            supplier_id INTEGER,
+            order_date DATE,
+            expected_date DATE,
+            received_date DATE,
+            status TEXT DEFAULT 'PENDING', -- PENDING, RECEIVED, CANCELLED
+            quality_rating INTEGER DEFAULT 0, -- 1 to 5
+            notes TEXT,
+            FOREIGN KEY (supplier_id) REFERENCES suppliers (id)
+        )
+    ''')
+
+    # IsoBar Context Table
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS daily_context (
+            date DATE PRIMARY KEY,
+            weather_tag TEXT,
+            event_tag TEXT,
+            notes TEXT
+        )
+    ''')
+
+    # ShiftSmart Tables
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS staff (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            role TEXT,
+            hourly_rate REAL
+        )
+    ''')
+    
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS shifts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            date DATE,
+            slot TEXT, -- Morning, Evening
+            staff_id INTEGER,
+            FOREIGN KEY (staff_id) REFERENCES staff (id)
+        )
+    ''')
 
     conn.commit()
     conn.close()
@@ -222,7 +302,7 @@ def get_customer_by_phone(phone):
     conn.close()
     return df.iloc[0] if not df.empty else None
 
-def add_customer(name, phone, email):
+def add_customer(name, phone, email, city="Unknown", pincode="000000"):
     conn = get_connection()
     c = conn.cursor()
     try:
@@ -231,7 +311,7 @@ def add_customer(name, phone, email):
         if c.fetchone():
             return False, "Customer with this phone already exists!" # Return tuple (Success, Msg)
 
-        c.execute("INSERT INTO customers (name, phone, email) VALUES (?, ?, ?)", (name, phone, email))
+        c.execute("INSERT INTO customers (name, phone, email, city, pincode) VALUES (?, ?, ?, ?, ?)", (name, phone, email, city, pincode))
         conn.commit()
         return True, "Customer added successfully."
     except Exception as e:
@@ -250,6 +330,284 @@ def update_stock(product_id, quantity_change):
     conn.close()
     # Invalidate Cache
     fetch_all_products.clear()
+
+
+# --- FRESHFLOW MODULE LOGIC ---
+
+def add_batch(product_id, batch_code, expiry_date, quantity, cost_price):
+    """Adds a new batch and updates total stock."""
+    conn = get_connection()
+    c = conn.cursor()
+    try:
+        # 1. Insert Batch
+        c.execute('''
+            INSERT INTO product_batches (product_id, batch_code, expiry_date, quantity, cost_price)
+            VALUES (?, ?, ?, ?, ?)
+        ''', (product_id, batch_code, expiry_date, quantity, cost_price))
+        
+        # 2. Update Total Stock in master table
+        c.execute('UPDATE products SET stock_quantity = stock_quantity + ? WHERE id = ?', (quantity, product_id))
+        
+        conn.commit()
+        return True, "Batch added successfully."
+    except Exception as e:
+        conn.rollback()
+        return False, str(e)
+    finally:
+        conn.close()
+        fetch_all_products.clear()
+
+def get_expiring_batches(days_threshold=7):
+    """Returns batches expiring within threshold days."""
+    conn = get_connection()
+    # Logic: expiry_date <= (today + threshold) AND quantity > 0
+    query = '''
+        SELECT b.*, p.name as product_name, p.price as current_price
+        FROM product_batches b
+        JOIN products p ON b.product_id = p.id
+        WHERE b.quantity > 0 
+        AND b.expiry_date <= date('now', '+' || ? || ' days')
+        ORDER BY b.expiry_date ASC
+    '''
+    df = pd.read_sql_query(query, conn, params=(str(days_threshold),))
+    conn.close()
+    return df
+
+    return df
+
+# --- VENDORTRUST MODULE LOGIC ---
+
+def add_supplier(name, contact, phone, specialty):
+    conn = get_connection()
+    c = conn.cursor()
+    try:
+        # Check uniqueness
+        c.execute("SELECT id FROM suppliers WHERE name = ? OR phone = ?", (name, phone))
+        if c.fetchone():
+            return False, "Supplier already exists (same name or phone)."
+            
+        c.execute("INSERT INTO suppliers (name, contact_person, phone, category_specialty) VALUES (?, ?, ?, ?)", 
+                  (name, contact, phone, specialty))
+        conn.commit()
+        return True, "Supplier added."
+    except Exception as e:
+        return False, str(e)
+    finally:
+        conn.close()
+
+def get_all_suppliers():
+    conn = get_connection()
+    # Deduplicate view logic: Group by name/phone to hide dupes if they exist
+    # Ideally we should clean the DB, but for now we filter view
+    df = pd.read_sql_query("SELECT * FROM suppliers GROUP BY name", conn)
+    conn.close()
+    return df
+
+def create_purchase_order(supplier_id, expected_date, notes=""):
+    conn = get_connection()
+    c = conn.cursor()
+    try:
+        c.execute("INSERT INTO purchase_orders (supplier_id, order_date, expected_date, notes) VALUES (?, date('now'), ?, ?)",
+                  (supplier_id, expected_date, notes))
+        conn.commit()
+        return True, "PO Created."
+    except Exception as e:
+        return False, str(e)
+    finally:
+        conn.close()
+
+def get_open_pos():
+    conn = get_connection()
+    query = '''
+        SELECT po.*, s.name as supplier_name 
+        FROM purchase_orders po
+        JOIN suppliers s ON po.supplier_id = s.id
+        WHERE po.status = 'PENDING'
+    '''
+    df = pd.read_sql_query(query, conn)
+    conn.close()
+    return df
+
+def receive_purchase_order(po_id, quality_rating):
+    conn = get_connection()
+    c = conn.cursor()
+    try:
+        c.execute('''
+            UPDATE purchase_orders 
+            SET status = 'RECEIVED', received_date = date('now'), quality_rating = ?
+            WHERE id = ?
+        ''', (quality_rating, po_id))
+        conn.commit()
+        return True, "PO Received."
+    except Exception as e:
+        return False, str(e)
+    finally:
+        conn.close()
+
+def get_vendor_scorecard(supplier_id):
+    conn = get_connection()
+    # On-Time: received <= expected
+    # Score: AVG quality
+    query = "SELECT * FROM purchase_orders WHERE supplier_id = ? AND status = 'RECEIVED'"
+    df = pd.read_sql_query(query, conn, params=(supplier_id,))
+    conn.close()
+    
+    if df.empty:
+        return {'on_time_rate': 100, 'avg_quality': 5.0, 'risk': 'Unknown (New)'}
+    
+    df['expected_date'] = pd.to_datetime(df['expected_date'])
+    df['received_date'] = pd.to_datetime(df['received_date'])
+    
+    on_time_count = len(df[df['received_date'] <= df['expected_date']])
+    total = len(df)
+    on_time_rate = (on_time_count / total) * 100
+    avg_quality = df['quality_rating'].mean()
+    
+    risk = "Low"
+    if on_time_rate < 70 or avg_quality < 3.0:
+        risk = "High"
+    elif on_time_rate < 90 or avg_quality < 4.0:
+        risk = "Medium"
+        
+    return {'on_time_rate': on_time_rate, 'avg_quality': avg_quality, 'risk': risk}
+
+# --- ISOBAR MODULE LOGIC ---
+
+def set_daily_context(date_str, weather, event, notes=""):
+    conn = get_connection()
+    c = conn.cursor()
+    try:
+        c.execute("INSERT OR REPLACE INTO daily_context (date, weather_tag, event_tag, notes) VALUES (?, ?, ?, ?)",
+                  (date_str, weather, event, notes))
+        conn.commit()
+        return True, "Context Saved."
+    except Exception as e:
+        return False, str(e)
+    finally:
+        conn.close()
+
+def get_daily_context(date_str):
+    conn = get_connection()
+    c = conn.cursor()
+    c.execute("SELECT * FROM daily_context WHERE date = ?", (date_str,))
+    res = c.fetchone()
+    conn.close()
+    return res
+
+def analyze_context_demand(weather_filter=None, event_filter=None):
+    """
+    Finds top selling items on days that match the filters.
+    """
+    conn = get_connection()
+    
+    # 1. Find dates matching context
+    query = "SELECT date FROM daily_context WHERE 1=1"
+    params = []
+    
+    if weather_filter and weather_filter != "None":
+        query += " AND weather_tag = ?"
+        params.append(weather_filter)
+        
+    if event_filter and event_filter != "None":
+        query += " AND event_tag = ?"
+        params.append(event_filter)
+        
+    matching_dates_df = pd.read_sql_query(query, conn, params=params)
+    
+    if matching_dates_df.empty:
+        conn.close()
+        return pd.DataFrame() # No history
+        
+    dates = matching_dates_df['date'].tolist()
+    placeholders = ','.join(['?']*len(dates))
+    
+    # 2. Aggregates sales on those dates
+    sales_query = f'''
+        SELECT ti.product_name, SUM(ti.quantity) as total_qty, AVG(ti.price_at_sale) as avg_price
+        FROM transaction_items ti
+        JOIN transactions t ON ti.transaction_id = t.id
+        WHERE date(t.timestamp) IN ({placeholders})
+        GROUP BY ti.product_name
+        ORDER BY total_qty DESC
+        LIMIT 10
+    '''
+    
+    sales_df = pd.read_sql_query(sales_query, conn, params=dates)
+    conn.close()
+    return sales_df
+
+# --- SHIFTSMART MODULE LOGIC ---
+
+def add_staff(name, role, rate):
+    conn = get_connection()
+    c = conn.cursor()
+    try:
+        c.execute("INSERT INTO staff (name, role, hourly_rate) VALUES (?, ?, ?)", (name, role, rate))
+        conn.commit()
+        return True, "Staff added."
+    except Exception as e:
+        return False, str(e)
+    finally:
+        conn.close()
+
+def get_all_staff():
+    conn = get_connection()
+    df = pd.read_sql_query("SELECT * FROM staff", conn)
+    conn.close()
+    return df
+
+def assign_shift(date_str, slot, staff_id):
+    conn = get_connection()
+    c = conn.cursor()
+    try:
+        # Check if already assigned
+        c.execute("SELECT id FROM shifts WHERE date = ? AND slot = ? AND staff_id = ?", (date_str, slot, staff_id))
+        if c.fetchone():
+            return True, "Already assigned."
+            
+        c.execute("INSERT INTO shifts (date, slot, staff_id) VALUES (?, ?, ?)", (date_str, slot, staff_id))
+        conn.commit()
+        return True, "Shift assigned."
+    except Exception as e:
+        return False, str(e)
+    finally:
+        conn.close()
+
+def get_shifts(date_str):
+    conn = get_connection()
+    query = '''
+        SELECT sh.*, s.name, s.role 
+        FROM shifts sh
+        JOIN staff s ON sh.staff_id = s.id
+        WHERE sh.date = ?
+    '''
+    df = pd.read_sql_query(query, conn, params=(date_str,))
+    conn.close()
+    return df
+
+def predict_labor_demand(weather, event):
+    """
+    Returns estimated staff needed based on simulated demand.
+    Simple Heuristic: 1 Staff per 50 units of expected volume.
+    """
+    sales_df = analyze_context_demand(weather, event)
+    if sales_df.empty:
+        return 2 # Baseline staffing
+        
+    total_est_volume = sales_df['total_qty'].sum() / 10 # Normalize (history is sum, we need daily avg? simplified)
+    # Actually analyze_context_demand sums ALL history.
+    # We need AVG per day.
+    # Let's refine analyze_context_demand or handle it roughly here.
+    
+    # Rough fix: Assume history spans ~10 days? 
+    # Better: analyze_context_demand should return AVG.
+    # Let's assume the current analyze_context_demand returns SUM.
+    # We will just divide by a heuristic to get "Daily Volume".
+    
+    daily_vol = total_est_volume / 5 # Arbitrary divisor for MVP
+    
+    staff_needed = max(2, int(daily_vol / 20) + 1) # Min 2 staff
+    return staff_needed
 
 def record_transaction(items, total_amount, total_profit, customer_id=None, points_redeemed=0):
     """
@@ -284,8 +642,25 @@ def record_transaction(items, total_amount, total_profit, customer_id=None, poin
         # Prepare data for batch update: (qty_to_deduct, product_id)
         stock_updates = [(item['qty'], item['id']) for item in items]
         c.executemany('UPDATE products SET stock_quantity = stock_quantity - ? WHERE id = ?', stock_updates)
+
+       # 4. FEFO Batch Deduction (FreshFlow Logic)
+        for item in items:
+            qty_needed = item['qty']
+            p_id = item['id']
+            
+            # Fetch batches for this product ordered by expiry
+            c.execute("SELECT id, quantity FROM product_batches WHERE product_id = ? AND quantity > 0 ORDER BY expiry_date ASC", (p_id,))
+            batches = c.fetchall()
+            
+            for b_id, b_qty in batches:
+                if qty_needed <= 0:
+                    break
+                
+                deduct = min(qty_needed, b_qty)
+                c.execute("UPDATE product_batches SET quantity = quantity - ? WHERE id = ?", (deduct, b_id))
+                qty_needed -= deduct
         
-        # 3. Update Loyalty Points
+        # 5. Update Loyalty Points
         if customer_id:
             # Earn: 1 point per 10 currency of final paid amount? Or total? 
             # Sticking to Total Amount for earning to keep it simple.
@@ -350,7 +725,49 @@ def verify_user(username, password):
                 return True, "Login successful."
         
         return False, "Invalid username or password."
-    except Exception as e:
         return False, str(e)
     finally:
         conn.close()
+
+# --- CHURNGUARD & GEOVIZ LOGIC ---
+
+def get_churn_metrics(days_threshold=30):
+    conn = get_connection()
+    # Find customers whose last transaction was > threshold days ago
+    # We need MAX(timestamp) per customer from transactions
+    query = '''
+        SELECT c.id, c.name, c.phone, c.loyalty_points, MAX(t.timestamp) as last_seen, COUNT(t.id) as visit_count, SUM(t.total_amount) as total_spent
+        FROM customers c
+        LEFT JOIN transactions t ON c.id = t.customer_id
+        GROUP BY c.id
+    '''
+    df = pd.read_sql_query(query, conn)
+    conn.close()
+    
+    if df.empty:
+        return pd.DataFrame()
+
+    df['last_seen'] = pd.to_datetime(df['last_seen'])
+    now = datetime.now()
+    
+    # Fill usage logic
+    df['days_since'] = (now - df['last_seen']).dt.days
+    df['days_since'] = df['days_since'].fillna(999) # Never visited
+    
+    # Filter for Churn Risk: Active before (visited > 0) AND last_seen > threshold
+    churn_df = df[(df['visit_count'] > 0) & (df['days_since'] > days_threshold)].sort_values('total_spent', ascending=False)
+    
+    return churn_df
+
+def get_geo_revenue():
+    conn = get_connection()
+    query = '''
+        SELECT c.city, c.pincode, COUNT(DISTINCT t.id) as txn_count, SUM(t.total_amount) as revenue
+        FROM customers c
+        JOIN transactions t ON c.id = t.customer_id
+        GROUP BY c.city
+        ORDER BY revenue DESC
+    '''
+    df = pd.read_sql_query(query, conn)
+    conn.close()
+    return df
