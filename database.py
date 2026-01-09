@@ -114,9 +114,19 @@ def init_db():
             username TEXT UNIQUE NOT NULL,
             email TEXT,
             password_hash TEXT NOT NULL,
+            role TEXT DEFAULT 'admin', -- admin, manager, staff
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     ''')
+
+    # Migration: Add role to users if not exists
+    try:
+        c.execute("ALTER TABLE users ADD COLUMN role TEXT DEFAULT 'admin'")
+    except sqlite3.OperationalError:
+        pass
+        
+    # Default Subscription
+    c.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('subscription_plan', 'Starter')")
 
     # Product Batches (FreshFlow)
     c.execute('''
@@ -618,6 +628,14 @@ def get_shifts(date_str):
     conn.close()
     return df
 
+def update_setting(key, value):
+    """Updates or inserts a setting."""
+    conn = get_connection()
+    c = conn.cursor()
+    c.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", (key, str(value)))
+    conn.commit()
+    conn.close()
+
 def predict_labor_demand(weather, event):
     """
     Returns estimated staff needed based on simulated demand.
@@ -722,9 +740,63 @@ def get_low_stock_products(threshold=10):
     df = fetch_all_products()
     return df[df['stock_quantity'] <= threshold]
 
+    return df[df['stock_quantity'] <= threshold]
+
+# --- ACCESS CONTROL & SUBSCRIPTION LOGIC ---
+
+# Tiers Configuration
+TIERS = {
+    'Starter': ['1_Inventory', '2_POS', '3_Settings', '4_Dashboard'],
+    'Business': ['1_Inventory', '2_POS', '3_Settings', '4_Dashboard', '6_FreshFlow', '7_VendorTrust', '8_VoiceAudit'],
+    'Enterprise': ['*'] # All
+}
+
+# Role Configuration
+ROLES = {
+    'staff': ['2_POS', '8_VoiceAudit'], # Restricted
+    'manager': ['1_Inventory', '2_POS', '6_FreshFlow', '7_VendorTrust', '8_VoiceAudit', '4_Dashboard'],
+    'admin': ['*']
+}
+
+def check_access(username, page_name):
+    """
+    Returns (True, "") if allowed.
+    Returns (False, Reason) if blocked.
+    """
+    # 1. Fetch User Role & Subscription
+    conn = get_connection()
+    c = conn.cursor()
+    
+    # Get Role
+    c.execute("SELECT role FROM users WHERE username = ?", (username,))
+    r = c.fetchone()
+    user_role = r[0] if r else 'staff'
+    
+    # Get Subscription
+    c.execute("SELECT value FROM settings WHERE key = 'subscription_plan'")
+    s = c.fetchone()
+    sub_plan = s[0] if s else 'Starter'
+    
+    conn.close()
+    
+    # Clean Page Name (remove 'pages/' and '.py')
+    # Assuming page_name passed is "1_Inventory" or similar basename
+    
+    # 2. Check Role Limits
+    allowed_roles = ROLES.get(user_role, [])
+    if '*' not in allowed_roles and page_name not in allowed_roles:
+         return False, f"⛔ Restricted: '{user_role.title()}' cannot access this module."
+
+    # 3. Check Subscription Limits
+    allowed_sub = TIERS.get(sub_plan, [])
+    if '*' not in allowed_sub and page_name not in allowed_sub:
+        return False, f"🔒 Locked: Upgrade to '{sub_plan}' to unlock this."
+        
+    return True, "Access Granted"
+
 import hashlib
 
-def create_user(username, password, email):
+def create_user(username, password, email, role='staff'):
     """Creates a new user with hashed password."""
     conn = get_connection()
     c = conn.cursor()
@@ -732,8 +804,8 @@ def create_user(username, password, email):
         # Simple SHA256 hashing
         password_hash = hashlib.sha256(password.encode()).hexdigest()
         
-        c.execute("INSERT INTO users (username, email, password_hash) VALUES (?, ?, ?)", 
-                  (username, email, password_hash))
+        c.execute("INSERT INTO users (username, email, password_hash, role) VALUES (?, ?, ?, ?)", 
+                  (username, email, password_hash, role))
         conn.commit()
         return True, "User created successfully."
     except sqlite3.IntegrityError:
@@ -748,14 +820,15 @@ def verify_user(username, password):
     conn = get_connection()
     c = conn.cursor()
     try:
-        c.execute("SELECT password_hash FROM users WHERE username = ?", (username,))
+        c.execute("SELECT password_hash, role FROM users WHERE username = ?", (username,))
         result = c.fetchone()
         
         if result:
             stored_hash = result[0]
+            role = result[1]
             input_hash = hashlib.sha256(password.encode()).hexdigest()
             if stored_hash == input_hash:
-                return True, "Login successful."
+                return True, role # Return Role instead of msg
         
         return False, "Invalid username or password."
     except Exception as e:

@@ -386,14 +386,15 @@ if not st.session_state["authenticated"]:
             login_pass = st.text_input("Password", type="password", key="login_pass")
             
             if st.button("Sign In", use_container_width=True):
-                success, msg = db.verify_user(login_user, login_pass)
+                success, role_or_msg = db.verify_user(login_user, login_pass)
                 if success:
                     st.session_state["authenticated"] = True
                     st.session_state["username"] = login_user
-                    st.success(msg)
+                    st.session_state["role"] = role_or_msg # It returns role on success
+                    st.success(f"Welcome back, {login_user}!")
                     st.rerun()
                 else:
-                    st.error(msg)
+                    st.error(role_or_msg)
                     
         with tab2:
             st.markdown("<br>", unsafe_allow_html=True)
