@@ -1,6 +1,7 @@
 import sqlite3
 import pandas as pd
 from datetime import datetime
+import streamlit as st
 
 DB_NAME = "retail_supply_chain.db"
 
@@ -10,6 +11,8 @@ def get_connection():
 def init_db():
     """Initializes the database with necessary tables if they don't exist."""
     conn = get_connection()
+    # OPTIMIZATION: Enable WAL Mode for concurrency
+    conn.execute("PRAGMA journal_mode=WAL;")
     c = conn.cursor()
     
     # Products Table
@@ -115,6 +118,19 @@ def init_db():
         )
     ''')
 
+    # --- OPTIMIZATION: INDEXES ---
+    # products(name) for search
+    c.execute("CREATE INDEX IF NOT EXISTS idx_products_name ON products(name)")
+    
+    # transactions(timestamp) for reporting
+    c.execute("CREATE INDEX IF NOT EXISTS idx_transactions_timestamp ON transactions(timestamp)")
+    
+    # transaction_items(transaction_id) for joins
+    c.execute("CREATE INDEX IF NOT EXISTS idx_txn_items_txn_id ON transaction_items(transaction_id)")
+    
+    # customers(phone) for fast lookup
+    c.execute("CREATE INDEX IF NOT EXISTS idx_customers_phone ON customers(phone)")
+
     conn.commit()
     conn.close()
 
@@ -159,6 +175,8 @@ def add_product(name, category, price, cost_price, stock_quantity, tax_rate=0.0)
         return False
     finally:
         conn.close()
+        # Invalidate Cache
+        fetch_all_products.clear()
 
 def update_product(product_id, price, cost_price, stock_quantity, tax_rate):
     """Updates price, cost, stock, and tax."""
@@ -177,7 +195,10 @@ def update_product(product_id, price, cost_price, stock_quantity, tax_rate):
         return False
     finally:
         conn.close()
+        # Invalidate Cache
+        fetch_all_products.clear()
 
+@st.cache_data(ttl=300)
 def fetch_all_products():
     """Returns a pandas DataFrame of all products."""
     conn = get_connection()
@@ -185,6 +206,7 @@ def fetch_all_products():
     conn.close()
     return df
 
+@st.cache_data(ttl=300)
 def fetch_customers():
     """Returns a pandas DataFrame of all customers."""
     conn = get_connection()
@@ -216,6 +238,8 @@ def add_customer(name, phone, email):
         return False, str(e)
     finally:
         conn.close()
+        # Invalidate Cache
+        fetch_customers.clear()
 
 def update_stock(product_id, quantity_change):
     """Updates stock. quantity_change can be negative (sale) or positive (restock)."""
@@ -224,6 +248,8 @@ def update_stock(product_id, quantity_change):
     c.execute('UPDATE products SET stock_quantity = stock_quantity + ? WHERE id = ?', (quantity_change, product_id))
     conn.commit()
     conn.close()
+    # Invalidate Cache
+    fetch_all_products.clear()
 
 def record_transaction(items, total_amount, total_profit, customer_id=None, points_redeemed=0):
     """
@@ -245,14 +271,19 @@ def record_transaction(items, total_amount, total_profit, customer_id=None, poin
         transaction_id = c.lastrowid
         
         # 2. Add Line Items and Update Stock
-        for item in items:
-            c.execute('''
-                INSERT INTO transaction_items (transaction_id, product_id, product_name, quantity, price_at_sale, cost_at_sale)
-                VALUES (?, ?, ?, ?, ?, ?)
-            ''', (transaction_id, item['id'], item['name'], item['qty'], item['price'], item['cost']))
-            
-            # Deduct stock
-            c.execute('UPDATE products SET stock_quantity = stock_quantity - ? WHERE id = ?', (item['qty'], item['id']))
+        # 2. Add Line Items (Batch Optimization)
+        # Prepare data for batch insert
+        txn_items_data = [(transaction_id, item['id'], item['name'], item['qty'], item['price'], item['cost']) for item in items]
+        
+        c.executemany('''
+            INSERT INTO transaction_items (transaction_id, product_id, product_name, quantity, price_at_sale, cost_at_sale)
+            VALUES (?, ?, ?, ?, ?, ?)
+        ''', txn_items_data)
+        
+        # 3. Deduct Stock (Batch Optimization)
+        # Prepare data for batch update: (qty_to_deduct, product_id)
+        stock_updates = [(item['qty'], item['id']) for item in items]
+        c.executemany('UPDATE products SET stock_quantity = stock_quantity - ? WHERE id = ?', stock_updates)
         
         # 3. Update Loyalty Points
         if customer_id:
@@ -273,13 +304,15 @@ def record_transaction(items, total_amount, total_profit, customer_id=None, poin
         return None
     finally:
         conn.close()
+        # Invalidate Both Caches
+        fetch_all_products.clear()
+        fetch_customers.clear()
 
 
 def get_low_stock_products(threshold=10):
-    conn = get_connection()
-    df = pd.read_sql_query("SELECT * FROM products WHERE stock_quantity <= ?", conn, params=(threshold,))
-    conn.close()
-    return df
+    # OPTIMIZATION: Reuse cached entire product list instead of new DB hit
+    df = fetch_all_products()
+    return df[df['stock_quantity'] <= threshold]
 
 import hashlib
 

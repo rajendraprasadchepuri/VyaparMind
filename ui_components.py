@@ -59,7 +59,7 @@ def render_sidebar():
         /* User Content Container (Logo, Title, Logout) */
         [data-testid="stSidebarUserContent"] {
             order: 1;
-            padding-top: 2rem;
+            padding-top: 0rem !important; /* Aggressively reduced */
             padding-bottom: 1rem;
             padding-left: 1rem; 
             padding-right: 1rem;
@@ -68,7 +68,7 @@ def render_sidebar():
             align-items: center; 
             text-align: center;
             width: 100%; 
-            gap: 0.75rem; /* UNIFORM SPACING CONTROL */
+            gap: 0rem !important; /* REMOVED GAP */
         }
 
         /* Navigation Links */
@@ -82,7 +82,7 @@ def render_sidebar():
         [data-testid="stSidebarUserContent"] img {
              margin-left: auto;
              margin-right: auto;
-             margin-bottom: 0.5rem; /* Small gap below logo */
+             margin-bottom: -1rem !important; /* Pull content closer */
              max-width: 160px !important; /* Slightly smaller for balance */
         }
         
@@ -163,6 +163,11 @@ def render_sidebar():
 
         /* HIDE 'app' (first item) from Sidebar Navigation */
         [data-testid="stSidebarNav"] > ul > li:first-child {
+            display: none !important;
+        }
+
+        /* HIDE Sidebar Header (Deploy Button & Context) */
+        [data-testid="stSidebarHeader"] {
             display: none !important;
         }
         </style>
