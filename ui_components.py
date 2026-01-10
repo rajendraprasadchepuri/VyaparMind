@@ -218,7 +218,6 @@ def render_sidebar():
 
         [data-testid="stExpander"] {
             border: 1px solid #E6E7E8 !important;
-            border-left: 4px solid #009FDF !important;
             background-color: #FFFFFF !important;
             border-radius: 2px !important;
         }
@@ -285,6 +284,15 @@ def render_sidebar():
             background-color: #009FDF !important; 
             color: white !important;
         }
+        /* POS Specific: Ensure Search/Find Buttons match Input Height */
+        div[data-testid="stForm"] div[data-testid="stColumn"] button {
+             margin-top: 0px !important; 
+             height: 2.75rem !important; /* Matches default TextInput height roughly */
+             padding-top: 0px !important;
+             padding-bottom: 0px !important;
+             align-self: flex-end !important;
+        }
+
         </style>
     """, unsafe_allow_html=True)
 
@@ -396,8 +404,7 @@ def render_top_header():
                 
                 /* Ensure Header Container has proper spacing */
                 div[data-testid="stHorizontalBlock"]:nth-of-type(1) {
-                    margin-bottom: 1rem !important; /* Positive margin to prevent overlap */
-                    align-items: center;
+                    margin-bottom: 1rem !important; 
                 }
                 
                 /* Username styling */
@@ -426,8 +433,8 @@ def render_top_header():
 
         # Uses columns to push content to the far right. 
         # Ratios: Spacer (4), User Label (2.5), Logout Button (1)
-        # Relaxed spacer to ensure content has enough width to not clip
-        c_spacer, c_user, c_logout = st.columns([4, 2.5, 1], gap="small")
+        # Using vertical_alignment="center" natively to avoid CSS conflicts
+        c_spacer, c_user, c_logout = st.columns([4, 2.5, 1], gap="small", vertical_alignment="center")
 
         
         with c_user:

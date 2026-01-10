@@ -115,8 +115,10 @@ st.write(" ") # Spacer
 
 with st.expander("👤 Customer Details (Optional)", expanded=True):
     # 1. Search by Phone
+    # 1. Search by Phone
     with st.form("customer_search_form_pos"):
-        c_p1, c_p2 = st.columns([2, 1])
+        # Use vertical_alignment='bottom' to align button with input field
+        c_p1, c_p2 = st.columns([3, 1], vertical_alignment="bottom")
         phone_input = c_p1.text_input("Enter Customer Phone", placeholder="e.g. 9876543210", key="pos_cust_phone_input")
         if c_p2.form_submit_button("Search", use_container_width=True):
              pass # Triggers rerun to show search results
@@ -154,6 +156,7 @@ with st.expander("👤 Customer Details (Optional)", expanded=True):
 
 # --- Alignment Styling ---
 # --- Layout ---
+# --- Layout ---
 col_products, col_cart = st.columns([3, 2], vertical_alignment="top")
 
 
@@ -167,9 +170,12 @@ with col_products:
         
         if not inventory.empty:
             # Search
+            # Search
             with st.form("inventory_search_form_pos"):
-                search = st.text_input("Search Item", placeholder="Barcode or Name...")
-                if st.form_submit_button("Find"):
+                # Align Search Input and Find Button
+                c_s1, c_s2 = st.columns([3, 1], vertical_alignment="bottom")
+                search = c_s1.text_input("Search Item", placeholder="Barcode or Name...")
+                if c_s2.form_submit_button("Find", use_container_width=True):
                     pass
             
             if search:
@@ -200,7 +206,9 @@ with col_products:
                             # Max defaulted to 10 or stock, whichever is lower? No, let user decide, but cap at stock.
                             qty_val = st.number_input("Qty", min_value=1, max_value=row['stock_quantity'], value=1, step=1, key=f"qty_{row['id']}", label_visibility="collapsed")
                         with c5:
-                            if st.button("Add", key=f"add_{row['id']}", use_container_width=True):
+                             # Align Add button with Input
+                             st.write("") # Spacer if needed, or rely on nice alignment
+                             if st.button("Add", key=f"add_{row['id']}", use_container_width=True):
                                 # Get tax rate, default to 0 if missing
                                 tr = row.get('tax_rate', 0.0)
                                 if pd.isna(tr): tr = 0.0

@@ -1,10 +1,3 @@
-# VyaparMind: The Intelligent Retail OS 🧠
-
-![VyaparMind Logo](logo_no_text_3.svg)
-
-> **Growth • Purity • Success**
-
-VyaparMind is not just a POS. It is a complete **AI Operating System** for modern retail, designed to optimize every aspect of your business: Inventory, Suppliers, Staff, and Customers.
 
 ## 🚀 Key Modules
 
