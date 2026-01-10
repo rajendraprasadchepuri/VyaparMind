@@ -1073,7 +1073,7 @@ def predict_labor_demand(weather, event):
     staff_needed = max(2, int(daily_vol / 20) + 1)
     return staff_needed
 
-def record_transaction(items, total_amount, total_profit, customer_id=None, points_redeemed=0, override_account_id=None):
+def record_transaction(items, total_amount, total_profit, customer_id=None, points_redeemed=0, payment_method='CASH', override_account_id=None):
     """
     items: list of dicts {'id': prod_id, 'name': name, 'qty': qty, 'price': price, 'cost': cost}
     customer_id: Optional ID of the customer
@@ -1087,12 +1087,12 @@ def record_transaction(items, total_amount, total_profit, customer_id=None, poin
     txn_hash = secrets.token_hex(8) # 8 bytes = 16 hex chars
     
     aid = override_account_id if override_account_id is not None else get_current_account_id()
-    print(f"DEBUG: record_transaction for account_id={aid}")
+    print(f"DEBUG: record_transaction for account_id={aid}, method={payment_method}")
     
     try:
         # 1. Create Transaction Record (With Account ID)
-        c.execute('INSERT INTO transactions (account_id, total_amount, total_profit, timestamp, customer_id, transaction_hash, points_redeemed) VALUES (?, ?, ?, ?, ?, ?, ?)', 
-                  (aid, total_amount, total_profit, datetime.now(), customer_id, txn_hash, points_redeemed))
+        c.execute('INSERT INTO transactions (account_id, total_amount, total_profit, timestamp, customer_id, transaction_hash, points_redeemed, payment_method) VALUES (?, ?, ?, ?, ?, ?, ?, ?)', 
+                  (aid, total_amount, total_profit, datetime.now(), customer_id, txn_hash, points_redeemed, payment_method))
         transaction_id = c.lastrowid
         
         # 2. Add Line Items and Update Stock

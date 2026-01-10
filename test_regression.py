@@ -93,7 +93,8 @@ def test_regression():
     # 6. Test Transaction & Stock Deduction
     print("--- Testing Transaction & Stock ---")
     items = [{'id': p_id_a, 'name': 'Apple_A', 'qty': 10, 'price': 100, 'cost': 50}]
-    txn_hash = db.record_transaction(items, 1000, 500, override_account_id=aid_a)
+    # Verify payment method usage
+    txn_hash = db.record_transaction(items, 1000, 500, override_account_id=aid_a, payment_method="CARD")
     assert txn_hash is not None, "Txn Failed"
     
     # Verify stock deduction for A
