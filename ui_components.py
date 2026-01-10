@@ -338,31 +338,82 @@ def render_sidebar():
         },
         "Admin": {
             "⚙️ Settings": "3_Settings.py"
+        },
+        "System": {
+            "🛡️ Super Admin": "99_SuperAdmin.py"
         }
     }
     
     # Tiers & Roles Config (Mirroring DB Logic for UI consistency)
     TIERS = {
         'Starter': ['1_Inventory.py', '2_POS.py', '3_Settings.py', '4_Dashboard.py'],
+        'Professional': ['*'],
         'Business': ['1_Inventory.py', '2_POS.py', '3_Settings.py', '4_Dashboard.py', '6_FreshFlow.py', '7_VendorTrust.py', '8_VoiceAudit.py'],
         'Enterprise': ['*']
     }
+    
+    # Mapping "Feature Name" (DB) -> "File Basename" (FileSystem)
+    MODULE_MAP = {
+        "Inventory": "1_Inventory.py",
+        "POS Terminal": "2_POS.py",
+        "Settings": "3_Settings.py",
+        "Dashboard": "4_Dashboard.py",
+        "FreshFlow": "6_FreshFlow.py",
+        "VendorTrust": "7_VendorTrust.py",
+        "VoiceAudit": "8_VoiceAudit.py",
+        "IsoBar": "9_IsoBar.py",
+        "ShiftSmart": "10_ShiftSmart.py",
+        "ChurnGuard": "11_ChurnGuard.py",
+        "GeoViz": "12_GeoViz.py",
+        "StockSwap": "13_StockSwap.py",
+        "ShelfSense": "14_ShelfSense.py",
+        "CrowdStock": "15_CrowdStock.py",
+        "TableLink": "16_TableLink.py"
+    }
+
     ROLES = {
         'staff': ['2_POS.py', '8_VoiceAudit.py'], 
         'manager': ['1_Inventory.py', '2_POS.py', '6_FreshFlow.py', '7_VendorTrust.py', '8_VoiceAudit.py', '4_Dashboard.py'],
-        'admin': ['*']
+        'admin': ['*'],
+        'super_admin': ['*']
     }
 
-    allowed_sub = TIERS.get(sub_plan, [])
+    if sub_plan in TIERS:
+        allowed_sub = TIERS[sub_plan]
+    else:
+        # Custom Plan Logic
+        import database as db
+        feats = db.get_plan_features(sub_plan)
+        if feats:
+            allowed_sub = ["4_Dashboard.py", "3_Settings.py"] # Always allowed basics
+            for f in feats:
+                if f in MODULE_MAP:
+                    allowed_sub.append(MODULE_MAP[f])
+        else:
+            # Fallback for completely unknown/legacy plans
+            allowed_sub = ['4_Dashboard.py', '3_Settings.py'] # Minimal access
+
+    # Override: Super Admin gets all access regardless of plan setting
+    if user_role == 'super_admin':
+        allowed_sub = ['*']
+
     allowed_role = ROLES.get(user_role, [])
     
     current_page = st.session_state.get("current_page", "")
 
     # Render Groups
     for group, pages in PAGES.items():
+        # Super Admin Filter: ONLY show 'System' group
+        if user_role == 'super_admin' and group != 'System':
+            continue
+
         # Pre-check visibility
         visible_pages = []
         for label, file_path in pages.items():
+             # Special Hide for non-super_admin
+             if "SuperAdmin" in file_path and user_role != "super_admin":
+                 continue
+                 
              is_role = '*' in allowed_role or file_path in allowed_role
              is_sub = '*' in allowed_sub or file_path in allowed_sub
              if is_role and is_sub:

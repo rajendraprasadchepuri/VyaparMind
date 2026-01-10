@@ -306,6 +306,29 @@ def init_db():
     # product_batches(expiry_date) for FreshFlow
     c.execute("CREATE INDEX IF NOT EXISTS idx_batches_expiry ON product_batches(expiry_date)")
 
+    # 9. Subscription Plans Table (Super Admin)
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS subscription_plans (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT UNIQUE NOT NULL,
+            price REAL NOT NULL,
+            features TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+    # Default Plans
+    c.execute("INSERT OR IGNORE INTO subscription_plans (name, price) VALUES ('Starter', 0)")
+    c.execute("INSERT OR IGNORE INTO subscription_plans (name, price) VALUES ('Professional', 2999)")
+    c.execute("INSERT OR IGNORE INTO subscription_plans (name, price) VALUES ('Enterprise', 9999)")
+
+    # Migration: Accounts Status
+
+    # Migration: Accounts Status
+    try:
+        c.execute("SELECT status FROM accounts LIMIT 1")
+    except:
+        c.execute("ALTER TABLE accounts ADD COLUMN status TEXT DEFAULT 'ACTIVE'")
+
     # VendorTrust Tables
     c.execute('''
         CREATE TABLE IF NOT EXISTS suppliers (
@@ -444,6 +467,11 @@ def set_setting(key, value):
             c.execute("UPDATE settings SET value = ? WHERE key = ? AND account_id = ?", (value, key, aid))
         else:
             c.execute("INSERT INTO settings (account_id, key, value) VALUES (?, ?, ?)", (aid, key, value))
+            
+        # SYNC: If updating subscription_plan, also update accounts table
+        if key == 'subscription_plan':
+            c.execute("UPDATE accounts SET subscription_plan = ? WHERE id = ?", (value, aid))
+            
         conn.commit()
         return True, "Success"
     except Exception as e:
@@ -1173,8 +1201,12 @@ def create_company_account(company_name, username, password, email):
     new_acc_id = generate_unique_id(16)
     try:
         # Check if COMPANY NAME exists globally
-        c.execute("SELECT id FROM accounts WHERE company_name = ?", (company_name,))
-        if c.fetchone():
+        c.execute("SELECT id, status FROM accounts WHERE company_name = ?", (company_name,))
+        result = c.fetchone()
+        if result:
+            acc_id, status = result[0], result[1]
+            if status != 'ACTIVE':
+                return False, "Account is Suspended. Contact Support."
             return False, "Company Name already exists. Please login."
 
         # 1. Create Account
@@ -1233,9 +1265,9 @@ def verify_user(username, password, company_name_check):
     try:
         pwd_hash = hashlib.sha256(password.encode()).hexdigest()
         
-        # Strict Login: Match Username + Password + Company Name
+        # Strict Login: Match Username + Password + Company Name AND Check Status
         query = """
-            SELECT u.role, u.account_id, a.company_name 
+            SELECT u.role, u.account_id, a.company_name, a.status 
             FROM users u 
             JOIN accounts a ON u.account_id = a.id
             WHERE u.username = ? AND u.password_hash = ? AND a.company_name = ?
@@ -1244,7 +1276,12 @@ def verify_user(username, password, company_name_check):
         result = c.fetchone()
         
         if result:
-            role, aid, company = result[0], result[1], result[2]
+            role, aid, company, status = result[0], result[1], result[2], result[3]
+            
+            # STRICT CHECK
+            if status != 'ACTIVE':
+                return False, "Account is Suspended. Contact Support."
+                
             return True, role, aid, company
         
         return False, "Invalid credentials or company name."
@@ -1364,3 +1401,223 @@ def predict_labor_demand(weather, event):
     return staff_needed
 
 # End of database.py
+
+# --- SUPER ADMIN MODULE LOGIC ---
+
+def fetch_all_accounts():
+    """Returns all accounts (System Level)."""
+    conn = get_connection()
+    df = pd.read_sql_query("SELECT * FROM accounts ORDER BY created_at DESC", conn)
+    conn.close()
+    return df
+
+def create_tenant(company_name, plan="Starter"):
+    """Creates a new tenant account."""
+    conn = get_connection()
+    c = conn.cursor()
+    new_id = generate_unique_id(16, numeric_only=True)
+    try:
+        c.execute("INSERT INTO accounts (id, company_name, subscription_plan, status) VALUES (?, ?, ?, 'ACTIVE')", 
+                  (new_id, company_name, plan))
+        
+        # Initialize Default Settings for this Account
+        c.execute("INSERT INTO settings (account_id, key, value) VALUES (?, 'store_name', ?)", (new_id, company_name))
+        c.execute("INSERT INTO settings (account_id, key, value) VALUES (?, 'subscription_plan', ?)", (new_id, plan))
+        
+        conn.commit()
+        return True, f"Tenant Created. ID: {new_id}"
+    except Exception as e:
+        return False, str(e)
+    finally:
+        conn.close()
+
+def update_tenant_status(account_id, status):
+    """Updates tenant status (System Level)."""
+    # GUARD: Protect System Account
+    if account_id == 'SYS_001':
+        return False, "Cannot suspend the System Account."
+        
+    conn = get_connection()
+    c = conn.cursor()
+    try:
+        # Also check company name just in case ID varies
+        msg = "Status Updated."
+        if status == 'SUSPENDED':
+             c.execute("SELECT company_name FROM accounts WHERE id=?", (account_id,))
+             res = c.fetchone()
+             if res and (res[0] == 'VyaparMind System' or res[0] == 'admin'):
+                 return False, "Cannot suspend Critical System Account."
+                 
+        c.execute("UPDATE accounts SET status = ? WHERE id = ?", (status, account_id))
+        conn.commit()
+        return True, msg
+    except Exception as e:
+        return False, str(e)
+    finally:
+        conn.close()
+
+def update_tenant_plan(account_id, new_plan):
+    """Updates tenant subscription plan (System Level)."""
+    conn = get_connection()
+    c = conn.cursor()
+    try:
+        # Update Account Table
+        c.execute("UPDATE accounts SET subscription_plan = ? WHERE id = ?", (new_plan, account_id))
+        # Update Settings Table
+        c.execute("INSERT OR REPLACE INTO settings (account_id, key, value) VALUES (?, 'subscription_plan', ?)", (account_id, new_plan))
+        conn.commit()
+        return True, "Plan Updated."
+    except Exception as e:
+        return False, str(e)
+    finally:
+        conn.close()
+
+def fetch_floor_status():
+    """
+    Returns enriched table data for KDS-style display.
+    List of dicts: {id, label, capacity, status, start_time, order_id, items_count, items_summary}
+    """
+    conn = get_connection()
+    # Left join to get all tables even if empty
+    # We also need to calculate elapsed time in python or sql. Python is easier for formatting.
+    q = """
+        SELECT 
+            t.id, t.label, t.capacity, t.status, 
+            o.start_time, o.items_json
+        FROM restaurant_tables t
+        LEFT JOIN table_orders o ON t.current_order_id = o.id
+        WHERE t.account_id = ?
+    """
+    aid = get_current_account_id()
+    
+    data = []
+    try:
+        df = pd.read_sql_query(q, conn, params=(aid,))
+        
+        # Enriched processing
+        for _, row in df.iterrows():
+            item = {
+                "id": row['id'],
+                "label": row['label'],
+                "capacity": row['capacity'],
+                "status": row['status'],
+                "start_time": row['start_time'],
+                "items": []
+            }
+            
+            if row['items_json']:
+                try:
+                    import json
+                    items_list = json.loads(row['items_json'])
+                    item['items'] = items_list
+                except:
+                    item['items'] = []
+            
+            data.append(item)
+            
+        return data
+    except Exception as e:
+        print(f"Error fetching floor: {e}")
+        return []
+    finally:
+        conn.close()
+
+def get_plan_features(plan_name):
+    """Returns a list of feature strings for a given plan."""
+    conn = get_connection()
+    try:
+        # Check standard hardcoded tiers first (Optional, but DB is source of truth for custom)
+        # We'll just check DB.
+        c = conn.cursor()
+        c.execute("SELECT features FROM subscription_plans WHERE name = ?", (plan_name,))
+        row = c.fetchone()
+        if row and row[0]:
+            return [f.strip() for f in row[0].split(',') if f.strip()]
+        return []
+    except:
+        return []
+    finally:
+        conn.close()
+
+def get_system_overview():
+    """Aggregate stats for Super Admin."""
+    conn = get_connection()
+    
+    # Total Tenants
+    total_tenants = pd.read_sql_query("SELECT COUNT(*) as count FROM accounts", conn).iloc[0]['count']
+    
+    # Active Tenants
+    active_tenants = pd.read_sql_query("SELECT COUNT(*) as count FROM accounts WHERE status='ACTIVE'", conn).iloc[0]['count']
+    
+    # Total Transactions (Global) - indicative of activity
+    total_txns = pd.read_sql_query("SELECT COUNT(*) as count FROM transactions", conn).iloc[0]['count']
+    
+    conn.close()
+    return {
+        "Total Tenants": total_tenants,
+        "Active Tenants": active_tenants,
+        "Total Transactions": total_txns
+    }
+
+# --- SUB PLANS MANAGEMENT ---
+
+def get_all_plans():
+    """Returns all subscription plans as a dataframe."""
+    conn = get_connection()
+    try:
+        df = pd.read_sql_query("SELECT * FROM subscription_plans ORDER BY price ASC", conn)
+        return df
+    except:
+        return pd.DataFrame() # Fallback
+    finally:
+        conn.close()
+
+def add_plan(name, price, features=""):
+    """Adds a new subscription plan."""
+    conn = get_connection()
+    c = conn.cursor()
+    try:
+        c.execute("INSERT INTO subscription_plans (name, price, features) VALUES (?, ?, ?)", (name, price, features))
+        conn.commit()
+        return True, "Plan Added."
+    except Exception as e:
+        return False, str(e)
+    finally:
+        conn.close()
+
+def update_plan(old_name, new_name, new_price, new_features):
+    """Updates an existing subscription plan."""
+    conn = get_connection()
+    c = conn.cursor()
+    try:
+        # Check if new name exists and is not the old name (collision check)
+        if old_name != new_name:
+            c.execute("SELECT id FROM subscription_plans WHERE name = ?", (new_name,))
+            if c.fetchone():
+                return False, "Plan name already exists."
+
+        c.execute("""
+            UPDATE subscription_plans 
+            SET name = ?, price = ?, features = ? 
+            WHERE name = ?
+        """, (new_name, new_price, new_features, old_name))
+        
+        conn.commit()
+        return True, "Plan Updated."
+    except Exception as e:
+        return False, str(e)
+    finally:
+        conn.close()
+
+def delete_plan(plan_name):
+    """Deletes a plan by name."""
+    conn = get_connection()
+    c = conn.cursor()
+    try:
+        c.execute("DELETE FROM subscription_plans WHERE name = ?", (plan_name,))
+        conn.commit()
+        return True, "Plan Deleted."
+    except Exception as e:
+        return False, str(e)
+    finally:
+        conn.close()

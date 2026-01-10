@@ -66,31 +66,212 @@ with c_cfg.expander("⚙️ Configure Floor Plan (Add/Edit Tables)"):
 tables_df = db.get_tables()
 
 # 1. Floor Map
-st.subheader("Floor Plan")
+# 1. Floor Map (KDS Style)
+st.subheader("Live Floor Status")
+
+# --- CUSTOM CSS FOR KDS CARDS (PREMIUM) ---
+st.markdown("""
+<style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap');
+
+    /* Container Tweaks */
+    .block-container { padding-top: 2rem; }
+
+    /* Metric Cards */
+    div[data-testid="stMetric"] {
+        background: white;
+        border: 1px solid #E6E7E8;
+        border-radius: 12px;
+        padding: 10px;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.04);
+    }
+
+    /* KDS Card Base */
+    .kds-card {
+        background: white;
+        border-radius: 16px;
+        border: 1px solid #f0f0f0;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.06);
+        padding: 0;
+        margin-bottom: 20px;
+        transition: all 0.3s ease;
+        overflow: hidden;
+        position: relative;
+    }
+    .kds-card:hover {
+        transform: translateY(-5px);
+        box-shadow: 0 12px 24px rgba(0,0,0,0.12);
+    }
+
+    /* Status Gradients */
+    .bg-occupied {
+        background: linear-gradient(145deg, #fff5f5 0%, #ffe3e3 100%);
+        border-left: 6px solid #ff4d4d;
+    }
+    .bg-free {
+        background: linear-gradient(145deg, #f0fff4 0%, #dcfce7 100%);
+        border-left: 6px solid #22c55e;
+    }
+    .bg-warning {
+        background: linear-gradient(145deg, #fffbeb 0%, #fef3c7 100%);
+        border-left: 6px solid #f59e0b;
+    }
+
+    /* Header Section */
+    .kds-header {
+        padding: 15px;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        border-bottom: 1px solid rgba(0,0,0,0.05);
+    }
+    .kds-title {
+        font-family: 'Inter', sans-serif;
+        font-size: 1.25rem;
+        font-weight: 700;
+        color: #1f2937;
+        margin: 0;
+    }
+    .kds-badge {
+        font-family: 'Inter', sans-serif;
+        font-size: 0.85rem;
+        font-weight: 600;
+        padding: 4px 10px;
+        border-radius: 20px;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+    }
+    .badge-red { background: #fee2e2; color: #991b1b; }
+    .badge-green { background: #dcfce7; color: #166534; }
+    .badge-orange { background: #fef3c7; color: #92400e; }
+
+    /* Body Section - FIXED HEIGHT FOR ALIGNMENT */
+    .kds-body {
+        padding: 15px;
+        height: 200px;
+        overflow-y: hidden; /* Hide overflow for clean look, or auto if needed */
+    }
+    .kds-item {
+        font-family: 'Inter', sans-serif;
+        font-size: 0.95rem;
+        color: #4b5563;
+        margin-bottom: 6px;
+        display: flex;
+        align-items: center;
+    }
+    .kds-qty {
+        background: #f3f4f6;
+        color: #374151;
+        font-weight: 700;
+        font-size: 0.8rem;
+        padding: 2px 6px;
+        border-radius: 6px;
+        margin-right: 8px;
+    }
+
+    /* Footer Section */
+    .kds-footer {
+        padding: 10px 15px;
+        background: rgba(255,255,255,0.5);
+        border-top: 1px solid rgba(0,0,0,0.03);
+    }
+    
+    /* Hide Default Streamlit Button Borders for cleaner look if possible, or just use primary */
+</style>
+""", unsafe_allow_html=True)
+
+# Fetch Enriched Data
+floor_data = db.fetch_floor_status()
+
+# Metrics
+occupied = sum(1 for t in floor_data if t['status'] == 'Occupied')
+available = len(floor_data) - occupied
+m1, m2, m3 = st.columns(3)
+m1.metric("Available", available)
+m2.metric("Occupied", occupied)
+
+st.write("") # Spacer
 
 # Grid Layout
 cols = st.columns(4) # 4 Tables per row
 
-for idx, row in tables_df.iterrows():
+for idx, t_data in enumerate(floor_data):
     col_idx = idx % 4
     with cols[col_idx]:
-        # Card Logic
-        status_color = "green" if row['status'] == 'Available' else "red"
-        status_icon = "🟢" if row['status'] == 'Available' else "🔴"
+        is_occ = t_data['status'] == 'Occupied'
         
-        with st.container(border=True):
-            st.markdown(f"### {row['label']}")
-            st.caption(f"Capacity: {row['capacity']} Pax")
-            st.markdown(f"**Status**: :{status_color}[{row['status']}]")
+        # Determine Styles
+        card_class = "bg-free"
+        badge_class = "badge-green"
+        badge_text = "Free"
+        
+        time_str = ""
+        mins = 0
+        if is_occ:
+            card_class = "bg-occupied"
+            badge_class = "badge-red"
             
-            if row['status'] == 'Available':
-                if st.button(f"Seating {row['label']}", key=f"seat_{row['id']}", use_container_width=True):
-                    db.occupy_table(row['id'])
-                    st.rerun()
+            if t_data['start_time']:
+                try:
+                    start = pd.to_datetime(t_data['start_time'])
+                    now = datetime.now()
+                    diff = now - start
+                    mins = int(diff.total_seconds() / 60)
+                    time_str = f"{mins}m"
+                    badge_text = f"⏱️ {time_str}"
+                    
+                    if mins > 20: 
+                        card_class = "bg-warning"
+                        badge_class = "badge-orange"
+                    if mins > 45:
+                        card_class = "bg-occupied" # Back to red for urgency
+                        badge_class = "badge-red"
+                except:
+                    badge_text = "Active"
+        
+        # HTML CARD
+        html_content = f"""<div class="kds-card {card_class}">
+    <div class="kds-header">
+        <div class="kds-title">{t_data['label']}</div>
+        <div class="kds-badge {badge_class}">{badge_text}</div>
+    </div>
+    <div class="kds-body">"""
+        
+        # Items Logic
+        if is_occ:
+            items = t_data.get('items', [])
+            if items:
+                for i in items[:4]: # Show top 4
+                    html_content += f"""<div class="kds-item">
+    <span class="kds-qty">{i['qty']}</span> {i['name']}
+</div>"""
+                if len(items) > 4:
+                    html_content += f"<div class='kds-item' style='color:#9ca3af;'>+ {len(items)-4} more...</div>"
             else:
-                if st.button(f"Manage Order 📝", key=f"mng_{row['id']}", type="primary", use_container_width=True):
-                    st.session_state['selected_table'] = row['id']
-                    st.session_state['selected_table_label'] = row['label']
+                html_content += "<div class='kds-item' style='color:#9ca3af; font-style:italic;'>No items yet</div>"
+        else:
+            html_content += f"""<div style="text-align:center; padding-top:20px; color:#22c55e;">
+    <div style="font-size:2rem; margin-bottom:5px;">🍽️</div>
+    <div style="font-size:0.9rem; font-weight:600;">{t_data['capacity']} Seats</div>
+</div>"""
+            
+        html_content += """</div>
+</div>"""
+        
+        st.markdown(html_content, unsafe_allow_html=True)
+        
+        # BUTTONS (Native Streamlit Buttons outside HTML)
+        # We overlay them visually or just place below because Streamlit can't embed buttons in HTML
+        if is_occ:
+            if st.button(f"Manage Order", key=f"mng_{t_data['id']}", type="primary", use_container_width=True):
+                st.session_state['selected_table'] = t_data['id']
+                st.session_state['selected_table_label'] = t_data['label']
+                st.rerun()
+        else:
+            if st.button(f"Seat Guests", key=f"seat_{t_data['id']}", use_container_width=True):
+                db.occupy_table(t_data['id'])
+                st.rerun()
+        
+        st.write("") # Margin bottom
 
 # --- RECEIPT DIALOG ---
 import textwrap
