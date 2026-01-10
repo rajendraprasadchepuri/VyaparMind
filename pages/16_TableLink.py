@@ -232,6 +232,33 @@ if 'selected_table' in st.session_state:
     
     st.markdown(f"## 📝 Order Details: Table {t_lbl}")
     
+    # --- CUSTOMER DETAILS (ADDED) ---
+    active_customer = None
+    points_to_redeem = 0
+    cust_phone_key = f"t_cust_phone_{t_id}"
+
+    with st.expander("👤 Customer Details & Loyalty", expanded=True):
+        with st.form(f"t_cust_search_{t_id}"):
+             tc1, tc2 = st.columns([3, 1], vertical_alignment="bottom")
+             phone_val = tc1.text_input("Customer Phone", key=cust_phone_key, placeholder="Enter Phone...")
+             if tc2.form_submit_button("Search"):
+                 pass
+        
+        if phone_val:
+            cust = db.get_customer_by_phone(phone_val)
+            if cust:
+                st.success(f"✅ {cust['name']} | Points: {cust['loyalty_points']}")
+                active_customer = cust
+            else:
+                st.warning("Customer not found. Register?")
+                with st.form(f"t_cust_reg_{t_id}"):
+                    tr1, tr2 = st.columns(2)
+                    tn = tr1.text_input("Name")
+                    tem = tr2.text_input("Email")
+                    if st.form_submit_button("Register"):
+                         db.add_customer(tn, phone_val, tem)
+                         st.rerun()
+
     c_menu, c_bill = st.columns([1.5, 1])
     
     # FETCH ORDERS
@@ -276,6 +303,19 @@ if 'selected_table' in st.session_state:
             st.divider()
             st.write(f"#### Total: ₹{total_bill:.2f}")
             
+            # Loyalty Redemption
+            if active_customer and active_customer['loyalty_points'] >= 1000:
+                 st.info(f"Loyalty Points Available: {active_customer['loyalty_points']}")
+                 max_red = min(active_customer['loyalty_points'], int(total_bill))
+                 use_pts = st.checkbox("Redeem Points?", key=f"use_pts_{t_id}")
+                 if use_pts:
+                     points_to_redeem = st.number_input("Points", 0, max_red, 0, step=10, key=f"redeem_{t_id}")
+                     st.write(f"**Redeeming: -₹{points_to_redeem}**")
+            
+            payable = total_bill - points_to_redeem
+            if points_to_redeem > 0:
+                st.markdown(f"### Net Payable: ₹{payable:.2f}")
+
             # --- POS FUNCTIONS ---
             c_p1, c_p2 = st.columns(2)
             
@@ -286,7 +326,13 @@ if 'selected_table' in st.session_state:
                  # Use Shared Dialog
                  tax_amt = total_bill * 0.05
                  subtotal = total_bill - tax_amt
-                 ui.show_receipt_dialog(items, total_bill, subtotal, tax_amt, customer_info=f"Table: {t_lbl}")
+                 
+                 # Add Customer Info to Receipt
+                 c_info = f"Table: {t_lbl}"
+                 if active_customer:
+                     c_info += f" | {active_customer['name']}"
+
+                 ui.show_receipt_dialog(items, payable, total_bill, tax_amt, customer_info=c_info, points_redeemed=points_to_redeem)
             
             if c_p2.button("✅ Pay & Close", type="primary", use_container_width=True):
                 # 1. Record Transaction using database function
@@ -298,7 +344,8 @@ if 'selected_table' in st.session_state:
                 # We need simple profit calc
                 profit = sum((x['price'] - x['cost']) * x['qty'] for x in items)
                 
-                new_txn = db.record_transaction(items, total_bill, profit, payment_method=pay_mode)
+                cid = active_customer['id'] if active_customer else None
+                new_txn = db.record_transaction(items, total_bill, profit, payment_method=pay_mode, customer_id=cid, points_redeemed=points_to_redeem)
                 
                 # 2. Free Table
                 db.free_table(t_id)
