@@ -325,6 +325,7 @@ def render_sidebar():
             "🍏 FreshFlow (Zero-Waste)": "6_FreshFlow.py",
             "🚚 VendorTrust": "7_VendorTrust.py",
             "🗣️ VoiceAudit": "8_VoiceAudit.py",
+            "🍽️ TableLink": "16_TableLink.py",
         },
         "Intelligence": {
             "🌡️ IsoBar (Forecast)": "9_IsoBar.py",

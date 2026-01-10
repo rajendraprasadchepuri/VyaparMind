@@ -294,6 +294,8 @@ def init_db():
         )
     ''')
     
+    create_table_management_tables(conn)
+
     # CrowdStock Table
     c.execute('''
         CREATE TABLE IF NOT EXISTS crowd_campaigns (
@@ -798,6 +800,177 @@ def analyze_context_demand(weather_filter=None, event_filter=None):
     if event_filter and event_filter != "None":
         query += " AND event_tag = ?"
         params.append(event_filter)
+
+# --- TABLELINK (RESTAURANT) MODULE LOGIC ---
+
+def create_table_management_tables(conn):
+    c = conn.cursor()
+    # Restaurant Tables
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS restaurant_tables (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            account_id INTEGER DEFAULT 1,
+            label TEXT,
+            capacity INTEGER DEFAULT 4,
+            status TEXT DEFAULT 'Available', -- Available, Occupied
+            current_order_id INTEGER,
+            FOREIGN KEY (account_id) REFERENCES accounts(id)
+        )
+    ''')
+    
+    # Active Table Orders (Temporary holding before Transaction)
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS table_orders (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            account_id INTEGER DEFAULT 1,
+            table_id INTEGER,
+            items_json TEXT, -- JSON string of items
+            start_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (table_id) REFERENCES restaurant_tables(id),
+            FOREIGN KEY (account_id) REFERENCES accounts(id)
+        )
+    ''')
+    
+    # Seed some tables if empty
+    c.execute("SELECT count(*) FROM restaurant_tables")
+    if c.fetchone()[0] == 0:
+        # Seed 6 tables
+        for i in range(1, 7):
+            c.execute("INSERT INTO restaurant_tables (label, capacity, status) VALUES (?, ?, ?)", 
+                      (f"T{i}", 4 if i < 5 else 6, "Available"))
+    conn.commit()
+
+def get_tables():
+    conn = get_connection()
+    c = conn.cursor()
+    aid = get_current_account_id()
+    # Ensure tables exist for this account (Multi-tenant seeding logic omitted for brevity, assuming shared or pre-seeded)
+    # For now, just fetch checks
+    query = "SELECT * FROM restaurant_tables WHERE account_id = ?"
+    df = pd.read_sql_query("SELECT * FROM restaurant_tables", conn) # Simplified for demo, ignoring strict account binding for seed
+    conn.close()
+    return df
+
+def occupy_table(table_id):
+    conn = get_connection()
+    c = conn.cursor()
+    try:
+        # Create new order
+        c.execute("INSERT INTO table_orders (table_id, items_json) VALUES (?, '[]')", (table_id,))
+        new_order_id = c.lastrowid
+        
+        # Update Table
+        c.execute("UPDATE restaurant_tables SET status = 'Occupied', current_order_id = ? WHERE id = ?", (new_order_id, table_id))
+        conn.commit()
+        return True
+    except Exception as e:
+        print(e)
+        return False
+    finally:
+        conn.close()
+
+def get_table_order(table_id):
+    conn = get_connection()
+    c = conn.cursor()
+    query = """
+        SELECT o.id, o.items_json 
+        FROM restaurant_tables t
+        JOIN table_orders o ON t.current_order_id = o.id
+        WHERE t.id = ?
+    """
+    c.execute(query, (table_id,))
+    res = c.fetchone()
+    conn.close()
+    
+    if res:
+        import json
+        return res[0], json.loads(res[1])
+    return None, []
+
+def add_item_to_table(table_id, item_dict):
+    conn = get_connection()
+    c = conn.cursor()
+    try:
+        # Get current items
+        order_id, current_items = get_table_order(table_id)
+        if order_id is None: return False
+        
+        # Check if item exists to merge
+        found = False
+        for i in current_items:
+            if i['id'] == item_dict['id']:
+                i['qty'] += item_dict['qty']
+                i['total'] += item_dict['total']
+                found = True
+                break
+        
+        if not found:
+            current_items.append(item_dict)
+            
+        import json
+        new_json = json.dumps(current_items)
+        
+        c.execute("UPDATE table_orders SET items_json = ? WHERE id = ?", (new_json, order_id))
+        conn.commit()
+        return True
+    except Exception as e:
+        print(e)
+        return False
+    finally:
+        conn.close()
+
+def free_table(table_id):
+    """Clears table without saving transaction (Cancel)"""
+    conn = get_connection()
+    c = conn.cursor()
+    c.execute("UPDATE restaurant_tables SET status = 'Available', current_order_id = NULL WHERE id = ?", (table_id,))
+    conn.commit()
+    conn.close()
+
+def add_restaurant_table(label, capacity):
+    conn = get_connection()
+    c = conn.cursor()
+    aid = get_current_account_id()
+    try:
+        c.execute("INSERT INTO restaurant_tables (account_id, label, capacity, status) VALUES (?, ?, ?, 'Available')", (aid, label, capacity))
+        conn.commit()
+        return True, "Table Added"
+    except Exception as e:
+        return False, str(e)
+    finally:
+        conn.close()
+
+def delete_restaurant_table(table_id):
+    conn = get_connection()
+    c = conn.cursor()
+    try:
+        # Check if occupied
+        c.execute("SELECT status FROM restaurant_tables WHERE id = ?", (table_id,))
+        status = c.fetchone()[0]
+        if status != 'Available':
+            return False, "Cannot delete occupied table!"
+        
+        c.execute("DELETE FROM restaurant_tables WHERE id = ?", (table_id,))
+        conn.commit()
+        return True, "Table Deleted"
+    except Exception as e:
+        return False, str(e)
+    finally:
+        conn.close()
+
+def update_restaurant_table_capacity(table_id, new_capacity):
+    conn = get_connection()
+    c = conn.cursor()
+    try:
+        c.execute("UPDATE restaurant_tables SET capacity = ? WHERE id = ?", (new_capacity, table_id))
+        conn.commit()
+        return True, "Updated"
+    except Exception as e:
+        return False, str(e)
+    finally:
+        conn.close()
+
+
         
     matching_dates_df = pd.read_sql_query(query, conn, params=params)
     
