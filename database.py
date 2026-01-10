@@ -329,6 +329,21 @@ def fetch_all_products():
     conn.close()
     return df
 
+@st.cache_data(ttl=60)
+def fetch_pos_inventory():
+    """Returns all products with an additional 'total_sold' column."""
+    conn = get_connection()
+    # Left join to include products even with 0 sales
+    query = """
+        SELECT p.*, COALESCE(SUM(ti.quantity), 0) as total_sold
+        FROM products p
+        LEFT JOIN transaction_items ti ON p.id = ti.product_id
+        GROUP BY p.id
+    """
+    df = pd.read_sql_query(query, conn)
+    conn.close()
+    return df
+
 @st.cache_data(ttl=300)
 def fetch_customers():
     """Returns a pandas DataFrame of all customers."""
@@ -730,9 +745,10 @@ def record_transaction(items, total_amount, total_profit, customer_id=None, poin
         return None
     finally:
         conn.close()
-        # Invalidate Both Caches
+        # Invalidate All Product Caches
         fetch_all_products.clear()
         fetch_customers.clear()
+        fetch_pos_inventory.clear()
 
 
 def get_low_stock_products(threshold=10):
