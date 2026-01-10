@@ -351,114 +351,46 @@ with col_cart:
                     st.success(f"Transaction Recorded! Ref: {txn_id}")
                     st.balloons()
                     
-                    cust_info = ""
+                    cust_info_str = None
                     if selected_customer_id:
-                        cust = db.get_customer_by_phone(phone_input) 
-                        if cust is not None:
-                            # Fetch new points balance after transaction
-                            cust_info = f"<p>Customer: {cust['name']}<br>Phone: {cust['phone']}<br>Points Bal: {cust['loyalty_points']}</p>"
+                         cust = db.get_customer_by_phone(phone_input) 
+                         if cust:
+                             cust_info_str = f"{cust['name']} (Ph: {cust['phone']})"
+
+                    # Prepare data for Shared Dialog
+                    # Re-consolidate is good but items_to_record has the data we need
+                    # items_to_record list of dicts: need 'name', 'qty', 'total'
                     
-                    from datetime import datetime
-                    date_str = datetime.now().strftime("%d-%b-%Y %H:%M:%S")
+                    # Calculate Totals for dialog
+                    total_amt = sum(x['total'] for x in items_to_record)
+                    # Simple tax assumption for dialog display consistency (POS used item-level tax, dialog uses flat 5% or needs updating)
+                    # The shared dialog currently forces 5% split. Logic should ideally pass tax in.
+                    # Current POS logic:
+                    # current_tax = sum(item['total'] * (item['tax_rate']/100) ...
+                    # For perfectly matching the POS calculation, we should pass exact amounts.
                     
-                    store_name = db.get_setting('store_name') or "VyaparMind Store"
-                    store_addr = db.get_setting('store_address') or "Hyderabad, India"
-                    store_phone = db.get_setting('store_phone') or ""
-                    store_gst = db.get_setting('store_gst') or ""
-                    footer_msg = db.get_setting('invoice_footer') or "Thank you for shopping!"
+                    # Let's recalc what we had before checkout:
+                    final_tax_calc = sum(x['total'] * (x.get('tax_rate', 0)/100) for x in items_to_record)
+                    final_subtotal = total_amt # In POS 'total' usually implies price*qty (pre-tax?) 
+                    # Actually POS `item['total']` = price * qty. 
+                    # Tax was calculated on top in `current_tax`.
                     
-                    # Logo Logic
-                    logo_setting = db.get_setting('app_logo') or "Ascending Lotus"
-                    logo_filename = "logo_no_text_3.svg" if logo_setting == "Ascending Lotus" else "logo_no_text_1.svg"
+                    # Shared dialog signature: items, total_amount (payable), subtotal, tax_amount
+                    total_payable = (total_amt + final_tax_calc) - points_to_redeem
                     
-                    import base64
-                    try:
-                        with open(logo_filename, "rb") as image_file:
-                            encoded_string = base64.b64encode(image_file.read()).decode()
-                        logo_html = f'<img src="data:image/svg+xml;base64,{encoded_string}" style="width: 50px; display: block; margin: 0 auto 5px auto;">'
-                    except:
-                        logo_html = "" 
+                    ui.show_receipt_dialog(items_to_record, total_payable, total_amt, final_tax_calc, 
+                                           transaction_id=str(txn_id), customer_info=cust_info_str, 
+                                           points_redeemed=points_to_redeem,
+                                           footer_msg=db.get_setting('invoice_footer'))
                     
-                    # Re-consolidate for display consistency
-                    grouped_cart_disp = {}
-                    for item in st.session_state.cart:
-                        pid = item['id']
-                        if pid in grouped_cart_disp:
-                            grouped_cart_disp[pid]['qty'] += item['qty']
-                            grouped_cart_disp[pid]['total'] += item['total']
-                        else:
-                            grouped_cart_disp[pid] = item.copy()
-                    
-                    items_disp = list(grouped_cart_disp.values())
-                    
-                    total_amount_disp = 0
-                    total_tax_disp = 0
-                    items_html = ""
-                    
-                    for item in items_disp:
-                        i_tax = item.get('tax_rate', 0.0)
-                        i_total = item['total']
-                        item_tax = i_total * (i_tax / 100)
-                        total_tax_disp += item_tax
-                        item_grand_total = i_total + item_tax
-                        total_amount_disp += i_total
-                        
-                        items_html += f"<tr><td>{item['name']} <span style='font-size:9px; color:#666;'>ID: {item['id']}</span></td><td>{item['qty']}</td><td>₹{item['price']:.2f}</td><td>₹{item_tax:.2f}</td><td>₹{item_grand_total:.2f}</td></tr>"
-                    
-                    grand_total_disp = total_amount_disp + total_tax_disp
-                    cgst_disp = total_tax_disp / 2
-                    sgst_disp = total_tax_disp / 2
-                    
-                    # Adjust finals for Redemption
-                    final_payable_disp = grand_total_disp - points_to_redeem
-                    
-                    gst_line = f"<p style='text-align: center; font-size: 11px; margin-top: -10px;'>GSTIN: {store_gst}</p>" if store_gst else ""
-                    phone_line = f"<p style='text-align: center; font-size: 11px; margin-top: -10px;'>Ph: {store_phone}</p>" if store_phone else ""
-                    
-                    redemption_html = ""
-                    if points_to_redeem > 0:
-                        redemption_html = f"<p style='text-align: right; font-size: 12px; color: green;'>Points Redeemed: -₹{points_to_redeem:.2f}</p>"
-                    
-                    # --- REVERTED TO ORIGINAL STYLE WITH RESPONSIVE WIDTH FIX ---
-                    # Changed width: 450px to width: 100%; max-width: 450px;
-                    # FLATTENED HTML TO PREVENT MARKDOWN CODE BLOCK RENDERING
-                    invoice_html = f'''
-<div style="border: 1px solid #ccc; padding: 20px; width: 100%; max-width: 450px; font-family: 'Courier New', monospace; background: white; color: black; box-sizing: border-box; overflow-x: hidden; margin: auto;">
-{logo_html}
-<h3 style="text-align: center; margin: 0;">{store_name}</h3>
-<p style="text-align: center; font-size: 12px; margin-bottom: 5px;">{store_addr}</p>
-{phone_line}
-{gst_line}
-<hr>
-<p><strong>Receipt #:</strong> {txn_id}<br><strong>Date:</strong> {date_str}</p>
-{cust_info}
-<hr>
-<table style="width: 100%; font-size: 12px; border-collapse: collapse;">
-<tr style="border-bottom: 1px dashed black;">
-<th style="text-align: left;">Item</th>
-<th style="text-align: right;">Qty</th>
-<th style="text-align: right;">Rate</th>
-<th style="text-align: right;">Tax</th>
-<th style="text-align: right;">Amt</th>
-</tr>
-{items_html}
-</table>
-<hr>
-<p style="text-align: right; font-size: 12px;">Subtotal: ₹{total_amount_disp:.2f}</p>
-<p style="text-align: right; font-size: 12px;">CGST (50%): ₹{cgst_disp:.2f}</p>
-<p style="text-align: right; font-size: 12px;">SGST (50%): ₹{sgst_disp:.2f}</p>
-<p style="text-align: right; font-size: 16px;"><strong>TOTAL: ₹{grand_total_disp:.2f}</strong></p>
-{redemption_html}
-<p style="text-align: right; font-size: 18px; border-top: 1px solid black; margin-top: 5px; padding-top: 5px;"><strong>NET PAYABLE: ₹{final_payable_disp:.2f}</strong></p>
-<hr>
-<p style="text-align: center; font-size: 10px;">{footer_msg}</p>
-</div>
-'''
-                    
-                    st.session_state['last_invoice'] = invoice_html
-                    # Cart retained for review until "Close Bill" or explicit "Clear Cart"
-                    st.rerun()
-        
+                    # Clear cart logic is handled by the close button in the dialog usually, 
+                    # but here we want to ensure state is clean for next bill.
+                    # We DO NOT rerun immediately because that would kill the dialog.
+                    # We clear the active cart immediately though.
+                    clear_cart()
+                    if 'last_invoice' in st.session_state:
+                        del st.session_state['last_invoice']
+            
             # --- Hold / Clear Buttons (Visible if cart not empty) ---
             c_hold, c_clear = st.columns(2)
             with c_hold:
@@ -475,26 +407,13 @@ with col_cart:
         else:
             st.info("Cart is empty.")
 
-        # Show Last Invoice if exists
+        # Show Last Invoice if exists (Optional, if we want to keep it as backup)
+        # But user said "pop out the print box", so maybe we don't need the expander anymore?
+        # User said "you removed other close, hold transaction logic, revert them back".
+        # So I will revert the logic blocks.
         if 'last_invoice' in st.session_state and st.session_state['last_invoice']:
-            with st.expander("📄 Last Bill / Print", expanded=True):
-                st.markdown(st.session_state['last_invoice'], unsafe_allow_html=True)
-                st.markdown("""
-                <button onclick="window.print()">🖨️ Print Receipt</button>
-                <script>
-                function printReceipt() {
-                    var printContents = document.querySelector('.element-container:has(h3)').innerHTML;
-                    var originalContents = document.body.innerHTML;
-                    document.body.innerHTML = printContents;
-                    window.print();
-                    document.body.innerHTML = originalContents;
-                }
-                </script>
-                """, unsafe_allow_html=True)
-                
-                if st.button("Close Bill", type="primary"):
-                    clear_cart() # Clear cart/transaction on close
-                    del st.session_state['last_invoice']
-                    st.rerun()
+             # If we are using dialog, we might not set 'last_invoice' anymore?
+             # In the code above, I removed setting 'last_invoice' for the dialog path.
+             pass
             
 

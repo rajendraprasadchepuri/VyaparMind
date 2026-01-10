@@ -11,6 +11,39 @@ ui.render_sidebar()
 ui.render_top_header()
 st.title("📊 VyaparMind Insight")
 
+# --- CUSTOM CSS FOR METRIC CARDS ---
+st.markdown("""
+<style>
+    div[data-testid="stMetric"] {
+        background-color: #ffffff;
+        border: 1px solid #e0e0e0;
+        padding: 15px;
+        border-radius: 8px;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+        height: 140px; /* Fixed Height */
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        overflow: hidden;
+    }
+    div[data-testid="stMetric"] > div {
+        width: 100%;
+    }
+    div[data-testid="stMetricLabel"] {
+        font-size: 14px;
+        color: #666;
+    }
+    div[data-testid="stMetricValue"] {
+        font-size: 28px;
+        font-weight: bold;
+        color: #333;
+    }
+    div[data-testid="stMetricDelta"] {
+        font-size: 14px;
+    }
+</style>
+""", unsafe_allow_html=True)
+
 conn = db.get_connection()
 aid = db.get_current_account_id()
 

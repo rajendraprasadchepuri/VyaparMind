@@ -93,26 +93,137 @@ for idx, row in tables_df.iterrows():
                     st.session_state['selected_table_label'] = row['label']
 
 # --- RECEIPT DIALOG ---
+import textwrap
+
+# --- RECEIPT DIALOG ---
 @st.dialog("🧾 Bill Receipt")
 def show_receipt_dialog(items, total, t_label, t_id):
-    st.markdown(f"### Table: {t_label}")
-    st.markdown(f"**Date**: {datetime.now().strftime('%Y-%m-%d %H:%M')}")
-    st.divider()
+    # Professional HTML Receipt
+    date_str = datetime.now().strftime('%d-%b-%Y %H:%M:%S')
+    import secrets
+    receipt_id = secrets.token_hex(4) # Short random ID
     
-    # Items
+    # Calculate Subtotal & Tax (Assuming 5% tax included for demo or just showing breakdown)
+    tax_amt = total * 0.05
+    subtotal = total - tax_amt
+    
+    # --- CUSTOM LOGO LOGIC ---
+    import os
+    import base64
+    
+    # 1. Determine Logo Path (Copy logic from ui_components)
+    try:
+        logo_choice = db.get_setting('app_logo') or "Ascending Lotus"
+    except:
+        logo_choice = "Ascending Lotus"
+
+    if logo_choice and logo_choice != "Ascending Lotus" and os.path.exists(logo_choice):
+        logo_file = logo_choice
+    elif logo_choice == "Ascending Lotus":
+         logo_file = "logo_no_text_3.svg"  # Default
+    else:
+         logo_file = "logo_no_text_1.svg"
+
+    # 2. Encode to Base64
+    logo_b64 = ""
+    try:
+        if os.path.exists(logo_file):
+            with open(logo_file, "rb") as image_file:
+                logo_b64 = base64.b64encode(image_file.read()).decode()
+    except Exception as e:
+        st.error(f"Logo error: {e}")
+
+    # 3. Construct Image Tag
+    if logo_b64:
+        # Check ext for mime type (rudimentary)
+        mime = "image/svg+xml" if logo_file.endswith(".svg") else "image/png"
+        logo_html = f'<img src="data:{mime};base64,{logo_b64}" style="max-height: 80px; width: auto;">'
+    else:
+        logo_html = '<span style="font-size: 40px;">🍚</span>'
+    
+    # Use simple flat strings
+    html_bill = f"""
+<div style="font-family: 'Courier New', monospace; padding: 20px; background: #fff; color: #000; border: 1px solid #ddd; max-width: 400px; margin: auto;">
+<!-- Header -->
+<div style="text-align: center; margin-bottom: 20px;">
+<div style="display: flex; justify-content: center; margin-bottom: 10px;">
+<!-- Logo -->
+{logo_html}
+</div>
+<h2 style="margin: 0; font-weight: bold; font-size: 24px; text-transform: uppercase;">Chings Chinese Restaurant</h2>
+<p style="margin: 5px 0; font-size: 12px;">Telephone Colony, Hyderabad, India<br>Ph: 9876543210</p>
+</div>
+
+<hr style="border-top: 1px dashed #000; margin: 10px 0;">
+
+<!-- Metadata -->
+<div style="font-size: 14px; margin-bottom: 10px;">
+<strong>Receipt #:</strong> {receipt_id}<br>
+<strong>Date:</strong> {date_str}
+</div>
+
+<hr style="border-top: 1px dashed #000; margin: 10px 0;">
+
+<!-- Table -->
+<table style="width: 100%; font-size: 14px; border-collapse: collapse;">
+<thead>
+<tr style="border-bottom: 1px dashed #000;">
+<th style="text-align: left; padding: 5px 0;">Item</th>
+<th style="text-align: center; padding: 5px 0;">Qty</th>
+<th style="text-align: right; padding: 5px 0;">Rate</th>
+<th style="text-align: right; padding: 5px 0;">Amt</th>
+</tr>
+</thead>
+<tbody>
+"""
+    
     for i in items:
-        st.write(f"{i['name']} x {i['qty']} ... ₹{i['total']:.2f}")
+        rate = i['total'] / i['qty'] if i['qty'] > 0 else 0
+        html_bill += f"""
+<tr>
+<td style="text-align: left; padding: 5px 0;">{i['name']}</td>
+<td style="text-align: center; padding: 5px 0;">{i['qty']}</td>
+<td style="text-align: right; padding: 5px 0;">₹{rate:.2f}</td>
+<td style="text-align: right; padding: 5px 0;">₹{i['total']:.2f}</td>
+</tr>
+"""
+        
+    html_bill += f"""
+</tbody>
+</table>
+
+<hr style="border-top: 1px dashed #000; margin: 10px 0;">
+
+<!-- Totals -->
+<div style="text-align: right; font-size: 14px; line-height: 1.6;">
+Subtotal: ₹{subtotal:.2f}<br>
+CGST (2.5%): ₹{tax_amt/2:.2f}<br>
+SGST (2.5%): ₹{tax_amt/2:.2f}<br>
+<div style="font-size: 20px; font-weight: bold; margin-top: 10px;">TOTAL: ₹{total:.2f}</div>
+</div>
+
+<hr style="border-top: 2px solid #000; margin: 10px 0;">
+<div style="text-align: center; font-size: 18px; font-weight: bold; margin-bottom: 20px;">
+NET PAYABLE: ₹{total:.2f}
+</div>
+
+<hr style="border-top: 1px dashed #000; margin: 10px 0;">
+
+<div style="text-align: center; font-size: 12px; margin-top: 20px;">
+Thank you for dining with us!
+</div>
+</div>
+"""
     
-    st.divider()
-    st.markdown(f"### Total: ₹{total:.2f}")
-    st.caption("Tax included where applicable.")
+    st.markdown(html_bill, unsafe_allow_html=True)
     
     st.markdown("---")
     st.info("💡 Pro-Tip: Press Ctrl+P to print this popup.")
     
-    if st.button("Close Preview"):
+    if st.button("Close Preview", key="close_receipt"):
         st.rerun()
 
+# --- ORDER MODAL / SECTION ---
 # --- ORDER MODAL / SECTION ---
 if 'selected_table' in st.session_state:
     st.divider()
@@ -172,7 +283,10 @@ if 'selected_table' in st.session_state:
             pay_mode = st.radio("Payment Mode", ["CASH", "UPI", "CARD"], horizontal=True)
 
             if c_p1.button("🖨️ Print Bill", use_container_width=True):
-                 show_receipt_dialog(items, total_bill, t_lbl, t_id)
+                 # Use Shared Dialog
+                 tax_amt = total_bill * 0.05
+                 subtotal = total_bill - tax_amt
+                 ui.show_receipt_dialog(items, total_bill, subtotal, tax_amt, customer_info=f"Table: {t_lbl}")
             
             if c_p2.button("✅ Pay & Close", type="primary", use_container_width=True):
                 # 1. Record Transaction using database function
@@ -183,12 +297,6 @@ if 'selected_table' in st.session_state:
                 
                 # We need simple profit calc
                 profit = sum((x['price'] - x['cost']) * x['qty'] for x in items)
-                
-                # Passing Payment Method logic would require updating db.record_transaction signature or handling it
-                # For now using default (CASH) or we accept the limitation of the base function
-                # Base function `record_transaction` might handle payment method if we updated it? 
-                # Let's check db signature. It defaults to 'CASH' or accepts arg?
-                # It accepts: items, total_amount, total_profit, payment_method='CASH'
                 
                 new_txn = db.record_transaction(items, total_bill, profit, payment_method=pay_mode)
                 

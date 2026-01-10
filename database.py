@@ -577,7 +577,7 @@ def get_customer_by_phone(phone):
     # clean phone? assume exact match for now
     df = pd.read_sql_query("SELECT * FROM customers WHERE phone = ? AND account_id = ?", conn, params=(phone, aid))
     conn.close()
-    return df.iloc[0] if not df.empty else None
+    return df.iloc[0].to_dict() if not df.empty else None
 
 def add_customer(name, phone, email, city="Unknown", pincode="000000"):
     conn = get_connection()

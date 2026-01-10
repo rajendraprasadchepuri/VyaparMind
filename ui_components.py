@@ -19,7 +19,10 @@ def render_sidebar():
     else:
          logo_file = "logo_no_text_1.svg" # Fallback
          
-    st.sidebar.image(logo_file, width=200) 
+    # Center the logo in sidebar
+    col1, col2, col3 = st.sidebar.columns([1, 4, 1])
+    with col2:
+        st.image(logo_file, use_container_width=True)
     
     # Dynamic Store Name
     import database as db
@@ -32,7 +35,7 @@ def render_sidebar():
         st.sidebar.markdown(f"## **<span style='color:#009FDF'>Vyapar</span><span style='color:#FFCD00'>Mind</span>**", unsafe_allow_html=True)
     else:
         st.sidebar.markdown(f"## **{store_name}**")
-    st.sidebar.caption("Growth • Purity • Success")
+    
     st.sidebar.markdown("---")
 
     # Apply Custom CSS for SABIC Theme (Industrial UI)
@@ -96,12 +99,7 @@ def render_sidebar():
             font-size: 1.4rem !important;
         }
         
-        /* Caption */
-        [data-testid="stSidebarUserContent"] .stCaption {
-             margin-top: 0 !important;
-             color: #888;
-             font-size: 0.85rem;
-        }
+
 
         /* Hide the default Streamlit Horizontal Rule to use CSS Border instead if preferred, 
            or style it to have 0 margin */
@@ -362,26 +360,21 @@ def render_sidebar():
 
     # Render Groups
     for group, pages in PAGES.items():
-        st.sidebar.caption(group.upper())
+        # Pre-check visibility
+        visible_pages = []
         for label, file_path in pages.items():
-            
-            # Check Permission
-            is_role_allowed = '*' in allowed_role or file_path in allowed_role
-            is_sub_allowed = '*' in allowed_sub or file_path in allowed_sub
-            
-            if is_role_allowed:
-                if is_sub_allowed:
-                    # Unlocked Page
-                    if st.sidebar.button(label, key=f"nav_{file_path}", use_container_width=True):
-                         st.switch_page(f"pages/{file_path}")
-                else:
-                    # Locked by Subscription
-                    st.sidebar.button(f"🔒 {label}", key=f"lock_{file_path}", disabled=True, use_container_width=True)
-            else:
-                # Hidden for Role (Don't show Admin pages to Staff)
-                pass 
-                
-        st.sidebar.markdown("") # Spacer
+             is_role = '*' in allowed_role or file_path in allowed_role
+             is_sub = '*' in allowed_sub or file_path in allowed_sub
+             if is_role and is_sub:
+                 visible_pages.append((label, file_path))
+        
+        if visible_pages:
+            st.sidebar.caption(group.upper())
+            for label, file_path in visible_pages:
+                if st.sidebar.button(label, key=f"nav_{file_path}", use_container_width=True):
+                     st.switch_page(f"pages/{file_path}")
+        
+            st.sidebar.markdown("") # Spacer
 
 
 
@@ -449,4 +442,244 @@ def render_top_header():
                 st.session_state["authenticated"] = False
                 st.session_state["username"] = None
                 st.rerun()
+
+
+# --- SHARED DIALOGS ---
+import textwrap
+from datetime import datetime
+import base64
+import os
+import database as db
+
+@st.dialog("🧾 Bill Receipt")
+def show_receipt_dialog(items, total_amount, subtotal, tax_amount, transaction_id=None, customer_info=None, points_redeemed=0, footer_msg=None):
+    """
+    Shared Receipt Dialog for POS and TableLink.
+    
+    Args:
+        items (list): List of dicts with 'name', 'qty', 'total' (and optional 'price')
+        total_amount (float): Final payable amount
+        subtotal (float): Amount before tax
+        tax_amount (float): Total tax amount
+        transaction_id (str): Optional ID
+        customer_info (str/dict): Optional customer details
+        points_redeemed (float): Discount from points
+        footer_msg (str): Custom footer message
+    """
+    
+    # 1. Store Settings & Logo
+    store_name = db.get_setting('store_name') or "Chings Chinese Restaurant"
+    store_addr = db.get_setting('store_address') or "Telephone Colony, Hyderabad, India"
+    store_phone = db.get_setting('store_phone') or "9876543210"
+    
+    if not footer_msg:
+        footer_msg = "Thank you for dining with us!"
+
+    # Logo Logic
+    try:
+        logo_choice = db.get_setting('app_logo') or "Ascending Lotus"
+    except:
+        logo_choice = "Ascending Lotus"
+
+    if logo_choice and logo_choice != "Ascending Lotus" and os.path.exists(logo_choice):
+        logo_file = logo_choice
+    elif logo_choice == "Ascending Lotus":
+         logo_file = "logo_no_text_3.svg"
+    else:
+         logo_file = "logo_no_text_1.svg"
+
+    logo_b64 = ""
+    try:
+        if os.path.exists(logo_file):
+            with open(logo_file, "rb") as image_file:
+                logo_b64 = base64.b64encode(image_file.read()).decode()
+    except:
+        pass
+
+    if logo_b64:
+        mime = "image/svg+xml" if logo_file.endswith(".svg") else "image/png"
+        logo_html = f'<img src="data:{mime};base64,{logo_b64}" style="max-height: 80px; width: auto;">'
+    else:
+        logo_html = '<span style="font-size: 40px;">🍚</span>'
+
+    # 2. Metadata
+    if not transaction_id:
+        import secrets
+        transaction_id = secrets.token_hex(4)
+        
+    date_str = datetime.now().strftime('%d-%b-%Y %H:%M:%S')
+
+    # 3. HTML Construction
+    # Use simple flat strings to avoid indentation issues
+    html_bill = f"""
+<div style="font-family: 'Courier New', monospace; padding: 20px; background: #fff; color: #000; border: 1px solid #ddd; max-width: 400px; margin: auto;">
+<!-- Header -->
+<div style="text-align: center; margin-bottom: 20px;">
+<div style="display: flex; justify-content: center; margin-bottom: 10px;">
+{logo_html}
+</div>
+<h2 style="margin: 0; font-weight: bold; font-size: 24px; text-transform: uppercase;">{store_name}</h2>
+<p style="margin: 5px 0; font-size: 12px;">{store_addr}<br>Ph: {store_phone}</p>
+</div>
+
+<hr style="border-top: 1px dashed #000; margin: 10px 0;">
+
+<!-- Metadata -->
+<div style="font-size: 14px; margin-bottom: 10px;">
+<strong>Receipt #:</strong> {transaction_id}<br>
+<strong>Date:</strong> {date_str}
+"""
+    
+    if customer_info:
+        # customer_info can be a string or dict, handle string simple
+        html_bill += f"<br><strong>Customer:</strong> {customer_info}"
+
+    html_bill += f"""
+</div>
+
+<hr style="border-top: 1px dashed #000; margin: 10px 0;">
+
+<!-- Table -->
+<table style="width: 100%; font-size: 14px; border-collapse: collapse;">
+<thead>
+<tr style="border-bottom: 1px dashed #000;">
+<th style="text-align: left; padding: 5px 0;">Item</th>
+<th style="text-align: center; padding: 5px 0;">Qty</th>
+<th style="text-align: right; padding: 5px 0;">Rate</th>
+<th style="text-align: right; padding: 5px 0;">Amt</th>
+</tr>
+</thead>
+<tbody>
+"""
+    
+    for i in items:
+        # Handle cases where dict keys might differ slightly between POS and TableLink
+        name = i.get('name', 'Item')
+        qty = i.get('qty', 0)
+        total = i.get('total', 0.0)
+        # rate calc
+        rate = total / qty if qty > 0 else 0
+        
+        html_bill += f"""
+<tr>
+<td style="text-align: left; padding: 5px 0;">{name}</td>
+<td style="text-align: center; padding: 5px 0;">{qty}</td>
+<td style="text-align: right; padding: 5px 0;">₹{rate:.2f}</td>
+<td style="text-align: right; padding: 5px 0;">₹{total:.2f}</td>
+</tr>
+"""
+
+    html_bill += f"""
+</tbody>
+</table>
+
+<hr style="border-top: 1px dashed #000; margin: 10px 0;">
+
+<!-- Totals -->
+<div style="text-align: right; font-size: 14px; line-height: 1.6;">
+Subtotal: ₹{subtotal:.2f}<br>
+CGST (2.5%): ₹{tax_amount/2:.2f}<br>
+SGST (2.5%): ₹{tax_amount/2:.2f}<br>
+"""
+    if points_redeemed > 0:
+        html_bill += f"<div style='color: green;'>Loyalty Disc: -₹{points_redeemed:.2f}</div>"
+
+    html_bill += f"""
+<div style="font-size: 20px; font-weight: bold; margin-top: 10px;">TOTAL: ₹{total_amount:.2f}</div>
+</div>
+
+<hr style="border-top: 2px solid #000; margin: 10px 0;">
+<div style="text-align: center; font-size: 18px; font-weight: bold; margin-bottom: 20px;">
+NET PAYABLE: ₹{total_amount:.2f}
+</div>
+
+<hr style="border-top: 1px dashed #000; margin: 10px 0;">
+
+<div style="text-align: center; font-size: 12px; margin-top: 20px;">
+{footer_msg}
+</div>
+</div>
+"""
+    
+
+    # A. Print Styles (Hidden by default, active on print)
+    
+    # B. Wrap HTML in printable class
+    # We prepend the wrapper div start
+    receipt_html_wrapped = f'<div id="printable-receipt-container" class="printable-receipt">{html_bill}</div>'
+    
+    st.markdown(receipt_html_wrapped, unsafe_allow_html=True)
+    st.markdown("---")
+    
+    # C. Print Button (HTML/JS) 
+    # Strategy change: Open a new window, write the receipt HTML there, and print IT.
+    # This avoids all the CSS hiding issues with Streamlit's complex DOM.
+    print_btn_html = """
+    <script>
+        function triggerPrint() {
+            try {
+                // 1. Get receipt content from Parent Frame
+                var receiptParams = window.parent.document.getElementById('printable-receipt-container');
+                
+                if (!receiptParams) {
+                    // Fallback to class name if ID fails
+                    var elements = window.parent.document.getElementsByClassName('printable-receipt');
+                    if (elements.length > 0) {
+                         receiptParams = elements[0];
+                    }
+                }
+                
+                if (receiptParams) {
+                    var content = receiptParams.innerHTML;
+                    
+                    // 2. Open new window
+                    var printWindow = window.open('', '', 'height=600,width=400');
+                    
+                    // 3. Write HTML
+                    printWindow.document.write('<html><head><title>Receipt</title>');
+                    printWindow.document.write('<style>body{ font-family: "Courier New", monospace; margin: 0; padding: 0; }</style>');
+                    printWindow.document.write('</head><body>');
+                    printWindow.document.write(content);
+                    printWindow.document.write('</body></html>');
+                    
+                    // 4. Print and Close
+                    printWindow.document.close();
+                    printWindow.focus();
+                    
+                    // Small timeout to ensure render
+                    setTimeout(function() {
+                        printWindow.print();
+                        printWindow.close();
+                    }, 500);
+                    
+                } else {
+                    alert("Could not find receipt content to print.");
+                }
+
+            } catch (e) {
+                console.error("Print Error: " + e);
+                alert("Auto-print failed. Please use Ctrl+P.");
+            }
+        }
+    </script>
+    <div style="display: flex; justify-content: center; gap: 10px;">
+        <button onclick="triggerPrint()" style="
+            background-color: #009FDF; 
+            color: white; 
+            border: none; 
+            padding: 10px 20px; 
+            font-size: 16px; 
+            cursor: pointer; 
+            border-radius: 4px; 
+            font-weight: bold;
+            display: flex; align-items: center; gap: 5px;">
+            🖨️ Print Bill
+        </button>
+    </div>
+    """
+    st.components.v1.html(print_btn_html, height=60)
+    
+    # Option: We can still offer a close button using Streamlit native if desired, 
+    # but user said "Change close preview to print bill", so we focus on that.
+    # The Dialog X button exists for closing.
 

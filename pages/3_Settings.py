@@ -51,6 +51,15 @@ with tab1:
                     filename = f"logo_{aid}.{ext}"
                     filepath = os.path.join(save_dir, filename)
                     
+                    # Cleanup old logos for this account to ensure clean overwrite
+                    # (e.g., if switching from png to jpg)
+                    for file in os.listdir(save_dir):
+                        if file.startswith(f"logo_{aid}."):
+                            try:
+                                os.remove(os.path.join(save_dir, file))
+                            except:
+                                pass
+
                     with open(filepath, "wb") as f:
                         f.write(uploaded_logo.getbuffer())
                     
