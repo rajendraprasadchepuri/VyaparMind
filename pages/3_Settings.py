@@ -1,6 +1,7 @@
 import streamlit as st
 import database as db
 import ui_components as ui
+import os
 
 st.set_page_config(page_title="Settings", layout="wide")
 ui.require_auth()
@@ -25,15 +26,51 @@ with tab1:
         new_phone = st.text_input("Phone", value=s_phone)
         
         st.markdown("### Branding")
-        new_logo = st.selectbox("App Logo Style", ["Ascending Lotus", "Minimal text"], index=0 if s_logo == "Ascending Lotus" else 1)
+        # Custom Logo Upload
+        uploaded_logo = st.file_uploader("Upload Store Logo (PNG/JPG)", type=['png', 'jpg', 'jpeg', 'svg'])
+        if s_logo and s_logo != "Ascending Lotus" and os.path.exists(s_logo):
+             st.image(s_logo, width=150, caption="Current Logo")
         
         if st.form_submit_button("Save Changes"):
-            db.update_setting("store_name", new_name)
-            db.update_setting("store_address", new_addr)
-            db.update_setting("store_phone", new_phone)
-            db.update_setting("app_logo", new_logo)
-            st.success("Settings updated!")
-            st.rerun()
+            s1, m1 = db.update_setting("store_name", new_name)
+            s2, m2 = db.update_setting("store_address", new_addr)
+            s3, m3 = db.update_setting("store_phone", new_phone)
+            
+            # Handle Logo Upload
+            logo_success = True
+            logo_msg = "Success"
+            if uploaded_logo:
+                try:
+                    # Create directory if not exists
+                    save_dir = "assets/uploads"
+                    os.makedirs(save_dir, exist_ok=True)
+                    
+                    # Generate filename: logo_{account_id}.ext
+                    aid = db.get_current_account_id()
+                    ext = uploaded_logo.name.split('.')[-1]
+                    filename = f"logo_{aid}.{ext}"
+                    filepath = os.path.join(save_dir, filename)
+                    
+                    with open(filepath, "wb") as f:
+                        f.write(uploaded_logo.getbuffer())
+                    
+                    logo_success, logo_msg = db.update_setting("app_logo", filepath)
+                except Exception as e:
+                    st.error(f"Failed to save logo file: {e}")
+                    logo_success = False
+
+            if s1 and s2 and s3 and logo_success:
+                st.success("All settings and logo updated successfully!")
+                import time
+                time.sleep(1)
+                st.rerun()
+            else:
+                errors = []
+                if not s1: errors.append(f"Store Name: {m1}")
+                if not s2: errors.append(f"Address: {m2}")
+                if not s3: errors.append(f"Phone: {m3}")
+                if not logo_success: errors.append(f"Logo: {logo_msg}")
+                st.error("Error saving settings:\n" + "\n".join(errors))
 
 with tab2:
     st.subheader("💳 Subscription & Billing")
@@ -52,8 +89,11 @@ with tab2:
             st.button("Current Plan", disabled=True, key="btn_starter")
         else:
             if st.button("Downgrade to Starter", key="btn_down_starter"):
-                db.update_setting("subscription_plan", "Starter")
-                st.rerun()
+                res, msg = db.update_setting("subscription_plan", "Starter")
+                if res:
+                    st.rerun()
+                else:
+                    st.error(msg)
 
     with c2:
         st.markdown("### Business")
@@ -63,9 +103,12 @@ with tab2:
             st.button("Current Plan", disabled=True, key="btn_business")
         else:
             if st.button("Upgrade to Business", key="btn_up_business"):
-                db.update_setting("subscription_plan", "Business")
-                st.balloons()
-                st.rerun()
+                res, msg = db.update_setting("subscription_plan", "Business")
+                if res:
+                    st.balloons()
+                    st.rerun()
+                else:
+                    st.error(msg)
 
     with c3:
         st.markdown("### Enterprise")
@@ -75,9 +118,12 @@ with tab2:
             st.button("Current Plan", disabled=True, key="btn_enterprise")
         else:
             if st.button("Upgrade to Enterprise", type="primary", key="btn_up_enterprise"):
-                db.update_setting("subscription_plan", "Enterprise")
-                st.balloons()
-                st.rerun()
+                res, msg = db.update_setting("subscription_plan", "Enterprise")
+                if res:
+                    st.balloons()
+                    st.rerun()
+                else:
+                    st.error(msg)
 
 with tab3:
     st.subheader("👥 User Access Control (RBAC)")

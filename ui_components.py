@@ -11,10 +11,13 @@ def render_sidebar():
         logo_choice = "Ascending Lotus"
 
     # Logo
-    if logo_choice == "Ascending Lotus":
+    import os
+    if logo_choice and logo_choice != "Ascending Lotus" and os.path.exists(logo_choice):
+        logo_file = logo_choice
+    elif logo_choice == "Ascending Lotus":
          logo_file = "logo_no_text_3.svg"
     else:
-         logo_file = "logo_no_text_1.svg" # Fixed: Use an existing file
+         logo_file = "logo_no_text_1.svg" # Fallback
          
     st.sidebar.image(logo_file, width=200) 
     
@@ -128,7 +131,7 @@ def render_sidebar():
         }
 
         /* Main Buttons - SQUARE & SABIC BLUE */
-        .stButton>button {
+        .stButton>button, div.stFormSubmitButton > button {
             background-color: #009FDF !important; /* SABIC Blue */
             color: white;
             border: none;
@@ -137,7 +140,7 @@ def render_sidebar():
             font-weight: 700;
             letter-spacing: 0.5px;
         }
-        .stButton>button:hover {
+        .stButton>button:hover, div.stFormSubmitButton > button:hover {
             background-color: #041E42 !important; /* SABIC Navy for Hover */
             color: white;
             box-shadow: none;
@@ -196,10 +199,10 @@ def render_sidebar():
         }
         
         /* Ensure Main Content Buttons stay properly styled (Reset override if any leak) */
-        .block-container .stButton > button {
+        .block-container .stButton > button, .block-container div.stFormSubmitButton > button {
             /* These will keep the Main Buttons (Vote, Submit) prominent and blue */
-            background-color: #009FDF; 
-            color: white;
+            background-color: #009FDF !important; 
+            color: white !important;
         }
         </style>
     """, unsafe_allow_html=True)

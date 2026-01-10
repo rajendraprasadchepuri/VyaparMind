@@ -12,10 +12,19 @@ ui.render_top_header()
 st.title("📊 VyaparMind Insight")
 
 conn = db.get_connection()
+aid = db.get_current_account_id()
 
-# Load Data
-transactions = pd.read_sql_query("SELECT * FROM transactions", conn)
-items = pd.read_sql_query("SELECT * FROM transaction_items", conn)
+# Load Data (Scoped to Account)
+transactions = pd.read_sql_query("SELECT * FROM transactions WHERE account_id = ?", conn, params=(aid,))
+# Transaction items don't have account_id, but we can filter by transaction_id in the previously filtered transactions
+# Actually, the transactions table has account_id, so we should filter transaction_items by joining with transactions
+items_query = """
+    SELECT ti.* 
+    FROM transaction_items ti 
+    JOIN transactions t ON ti.transaction_id = t.id 
+    WHERE t.account_id = ?
+"""
+items = pd.read_sql_query(items_query, conn, params=(aid,))
 conn.close()
 
 if not transactions.empty:
@@ -76,15 +85,18 @@ if not transactions.empty:
         
     with row1_col2:
         st.subheader("Category Distribution")
-        # Reuse previous logic for cat_df
+        # Reuse previous logic for cat_df (Scoped)
         conn = db.get_connection()
+        aid = db.get_current_account_id()
         cat_query = '''
-            SELECT p.category, SUM(t.quantity * t.price_at_sale) as revenue
-            FROM transaction_items t
-            JOIN products p ON t.product_id = p.id
+            SELECT p.category, SUM(ti.quantity * ti.price_at_sale) as revenue
+            FROM transaction_items ti
+            JOIN products p ON ti.product_id = p.id
+            JOIN transactions t ON ti.transaction_id = t.id
+            WHERE t.account_id = ?
             GROUP BY p.category
         '''
-        cat_df = pd.read_sql_query(cat_query, conn)
+        cat_df = pd.read_sql_query(cat_query, conn, params=(aid,))
         conn.close()
         
         if not cat_df.empty:
@@ -126,17 +138,19 @@ if not transactions.empty:
     st.subheader("👥 Customer Insights (Marketing)")
     
     conn = db.get_connection()
+    aid = db.get_current_account_id()
     try:
-        # Check if we have customer data linked
+        # Check if we have customer data linked (Scoped)
         cust_query = '''
             SELECT c.name, c.email, COUNT(t.id) as visits, SUM(t.total_amount) as total_spend, MAX(t.timestamp) as last_visit
             FROM transactions t
             JOIN customers c ON t.customer_id = c.id
+            WHERE t.account_id = ?
             GROUP BY c.id
             ORDER BY total_spend DESC
             LIMIT 10
         '''
-        top_customers = pd.read_sql_query(cust_query, conn)
+        top_customers = pd.read_sql_query(cust_query, conn, params=(aid,))
         
         if not top_customers.empty:
             c1, c2 = st.columns([2, 1])

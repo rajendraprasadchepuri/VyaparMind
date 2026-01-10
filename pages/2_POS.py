@@ -19,6 +19,46 @@ if 'cart' not in st.session_state:
 if 'held_bills' not in st.session_state:
     st.session_state['held_bills'] = []
 
+# handle_held_bill_actions() # We will trigger this via callbacks or state
+
+def handle_held_bill_actions():
+    if 'pending_action' in st.session_state:
+        action = st.session_state['pending_action']
+        if action['type'] == 'resume':
+            idx = action['index']
+            if idx < len(st.session_state['held_bills']):
+                bill = st.session_state['held_bills'].pop(idx)
+                # Auto-hold current if exists
+                if st.session_state.get('cart'):
+                    from datetime import datetime
+                    current_hold = {
+                        'id': datetime.now().strftime('%H:%M:%S'),
+                        'timestamp': datetime.now(),
+                        'cart': st.session_state.cart,
+                        'total': sum(i['total'] for i in st.session_state.cart),
+                        'customer_phone': st.session_state.get('pos_cust_phone')
+                    }
+                    st.session_state['held_bills'].append(current_hold)
+                
+                st.session_state.cart = bill['cart']
+                if bill.get('customer_phone'):
+                    st.session_state['pos_cust_phone'] = bill['customer_phone']
+                
+                if 'last_invoice' in st.session_state:
+                    del st.session_state['last_invoice']
+            
+            del st.session_state['pending_action']
+            # No rerun needed here as we are at the top, but it doesn't hurt.
+            # Actually, if we are at the top, we just continue.
+
+        elif action['type'] == 'discard':
+            idx = action['index']
+            if idx < len(st.session_state['held_bills']):
+                st.session_state['held_bills'].pop(idx)
+            del st.session_state['pending_action']
+
+handle_held_bill_actions()
+
 def add_to_cart(product_id, name, price, cost, stock, qty, tax_rate=0.0):
     # Check total quantity currently in cart for this product
     existing_item_index = next((index for (index, d) in enumerate(st.session_state.cart) if d["id"] == product_id), None)
@@ -75,43 +115,42 @@ st.write(" ") # Spacer
 
 with st.expander("👤 Customer Details (Optional)", expanded=True):
     # 1. Search by Phone
-    c_s1, c_s2 = st.columns([1, 2])
-    with c_s1:
-        phone_input = st.text_input("Enter Customer Phone", placeholder="e.g. 9876543210", key="pos_cust_phone")
+    with st.form("customer_search_form_pos"):
+        c_p1, c_p2 = st.columns([2, 1])
+        phone_input = c_p1.text_input("Enter Customer Phone", placeholder="e.g. 9876543210", key="pos_cust_phone_input")
+        if c_p2.form_submit_button("Search", use_container_width=True):
+             pass # Triggers rerun to show search results
     
-    with c_s2:
-        st.write("") # Spacer to align with text_input label
-        st.write("")
-        if phone_input:
-            # Search DB
-            cust = db.get_customer_by_phone(phone_input)
+    if phone_input:
+        # Search DB (using direct phone_input instead of session state to avoid conflict)
+        cust = db.get_customer_by_phone(phone_input)
             
-            if cust is not None:
-                # Found
-                st.success(f"✅ **{cust['name']}** found! (Points: {cust['loyalty_points']})")
-                selected_customer_id = int(cust['id'])
-            else:
-                # Not Found -> Add New
-                st.warning("New Customer! Quick Register:")
-                with st.form("new_cust_form_pos"):
-                    c_n1, c_n2 = st.columns(2)
-                    with c_n1:
-                        new_name = st.text_input("Name")
-                    with c_n2:
-                        new_email = st.text_input("Email")
-                    
-                    st.caption(f"Registering for Phone: {phone_input}")
-                    
-                    if st.form_submit_button("Create & Tag"):
-                        if new_name:
-                            success, msg = db.add_customer(new_name, phone_input, new_email)
-                            if success:
-                                st.success("Created!")
-                                st.rerun()
-                            else:
-                                st.error(msg)
+        if cust is not None:
+            # Found
+            st.success(f"✅ **{cust['name']}** found! (Points: {cust['loyalty_points']})")
+            selected_customer_id = int(cust['id'])
         else:
-            st.info("Enter phone number to earn loyalty points.")
+            # Not Found -> Add New
+            st.warning("New Customer! Quick Register:")
+            with st.form("new_cust_form_pos"):
+                c_n1, c_n2 = st.columns(2)
+                with c_n1:
+                    new_name = st.text_input("Name")
+                with c_n2:
+                    new_email = st.text_input("Email")
+                
+                st.caption(f"Registering for Phone: {phone_input}")
+                
+                if st.form_submit_button("Create & Tag"):
+                    if new_name:
+                        success, msg = db.add_customer(new_name, phone_input, new_email)
+                        if success:
+                            st.success("Created!")
+                            st.rerun()
+                        else:
+                            st.error(msg)
+    else:
+        st.info("Enter phone number to earn loyalty points.")
 
 # --- Alignment Styling ---
 # --- Layout ---
@@ -128,7 +167,11 @@ with col_products:
         
         if not inventory.empty:
             # Search
-            search = st.text_input("Search Item", placeholder="Barcode or Name...")
+            with st.form("inventory_search_form_pos"):
+                search = st.text_input("Search Item", placeholder="Barcode or Name...")
+                if st.form_submit_button("Find"):
+                    pass
+            
             if search:
                 inventory = inventory[inventory['name'].str.contains(search, case=False) | inventory['category'].str.contains(search, case=False)]
             else:
@@ -184,31 +227,11 @@ with col_cart:
                     c2.caption(f"Items: {len(bill['cart'])} | ₹{bill['total']:.0f}")
                     
                     if c3.button("Resume", key=f"resume_{idx}", use_container_width=True):
-                        # Auto-hold current if exists
-                        if st.session_state.cart:
-                            from datetime import datetime
-                            current_hold = {
-                                'id': datetime.now().strftime('%H:%M:%S'),
-                                'timestamp': datetime.now(),
-                                'cart': st.session_state.cart,
-                                'total': sum(i['total'] for i in st.session_state.cart),
-                                'customer_phone': st.session_state.get('pos_cust_phone')
-                            }
-                            st.session_state['held_bills'].append(current_hold)
-                            st.toast("Auto-held current bill.")
-                        
-                        st.session_state.cart = bill['cart']
-                        # Restore customer phone if exists
-                        if bill.get('customer_phone'):
-                            st.session_state['pos_cust_phone'] = bill['customer_phone']
-                        
-                        st.session_state['held_bills'].pop(idx)
-                        if 'last_invoice' in st.session_state:
-                            del st.session_state['last_invoice']
+                        st.session_state['pending_action'] = {'type': 'resume', 'index': idx}
                         st.rerun()
                         
                     if c4.button("❌", key=f"discard_{idx}", help="Discard Hold"):
-                        st.session_state['held_bills'].pop(idx)
+                        st.session_state['pending_action'] = {'type': 'discard', 'index': idx}
                         st.rerun()
                 st.divider()
 

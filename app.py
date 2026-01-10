@@ -213,7 +213,7 @@ if not st.session_state["authenticated"]:
         }
 
         /* Components overrides */
-        div.stButton > button {
+        div.stButton > button, div.stFormSubmitButton > button {
             background: #009FDF !important; /* SABIC Primary Blue */
             color: white !important;
             border-radius: 0px; /* SHARP CORNERS */
@@ -226,7 +226,7 @@ if not st.session_state["authenticated"]:
             transition: all 0.2s;
             border: none;
         }
-        div.stButton > button:hover {
+        div.stButton > button:hover, div.stFormSubmitButton > button:hover {
             background: #041E42 !important; /* SABIC Navy for Hover */
             transform: none; 
             box-shadow: none; 
@@ -270,6 +270,38 @@ if not st.session_state["authenticated"]:
             font-size: 1rem;
             font-weight: 600;
             padding-bottom: 0.8rem;
+        }
+
+        /* --- SEAMLESS FORMS --- */
+        [data-testid="stForm"] {
+            border: none !important;
+            padding: 0 !important;
+            background: transparent !important;
+        }
+        
+        /* Force labels to be visible and styled correctly */
+        label[data-testid="stWidgetLabel"] p {
+            font-size: 0.95rem !important;
+            font-weight: 700 !important;
+            color: #1E293B !important; /* Deep Slate for visibility */
+            visibility: visible !important;
+            display: block !important;
+            opacity: 1 !important;
+        }
+        
+        /* Subtly hide the form hint without affecting other text */
+        [data-testid="stForm"] > div[data-testid="stMarkdownContainer"]:last-of-type p {
+             font-size: 0px !important;
+             color: transparent !important;
+             height: 0px !important;
+             margin: 0 !important;
+        }
+        
+        /* Ensure Form Submit Button is full width and follows Corporate Blue */
+        [data-testid="stFormSubmitButton"] > button {
+            width: 100% !important;
+            background-color: #009FDF !important;
+            color: white !important;
         }
 
         /* --- MOTION GRAPHICS ENGINE: FINAL MIX (Bloom + Flow) --- */
@@ -381,37 +413,68 @@ if not st.session_state["authenticated"]:
         tab1, tab2 = st.tabs(["Login", "Sign Up"])
         
         with tab1:
-            st.markdown("<br>", unsafe_allow_html=True)
-            login_user = st.text_input("Username / Email", key="login_user", placeholder="admin")
-            login_pass = st.text_input("Password", type="password", key="login_pass")
+            with st.form("login_form"):
+                login_company = st.text_input("Company / Store Name", key="login_company_input", placeholder="VyaparMind Store")
+                login_user = st.text_input("Username / Email", key="login_user_input", placeholder="admin")
+                login_pass = st.text_input("Password", type="password", key="login_pass_input")
+                
+                if st.form_submit_button("Sign In", use_container_width=True):
+                    # Validations
+                    if not login_company:
+                        st.warning("Company Name is required.")
+                    elif not login_user or not login_pass:
+                        st.warning("Username and Password are required.")
+                    else:
+                        # Updated verify_user returns (Success, Role, AccountID, CompanyName) OR (False, Msg)
+                        # Pass company_name ALWAYS
+                        result = db.verify_user(login_user, login_pass, company_name_check=login_company)
+                        
+                        if result[0]: # Success
+                            st.session_state["authenticated"] = True
+                            st.session_state["username"] = login_user
+                            st.session_state["role"] = result[1]
+                            st.session_state["account_id"] = result[2]
+                            st.session_state["company_name"] = result[3]
+                            
+                            st.success(f"Welcome back, {login_user}!")
+                            st.rerun()
+                        else:
+                            st.error(result[1]) # Error Message
+
+            st.markdown("<div style='margin-bottom: 0px;'>&nbsp;</div>", unsafe_allow_html=True) # Explicit Mini-Spacer
             
-            if st.button("Sign In", use_container_width=True):
-                success, role_or_msg = db.verify_user(login_user, login_pass)
-                if success:
-                    st.session_state["authenticated"] = True
-                    st.session_state["username"] = login_user
-                    st.session_state["role"] = role_or_msg # It returns role on success
-                    st.success(f"Welcome back, {login_user}!")
-                    st.rerun()
-                else:
-                    st.error(role_or_msg)
+            # Forgot Password Flow
+            with st.expander("Forgot Password?"):
+                fp_contact = st.text_input("Enter Email or Phone", key="fp_contact")
+                if st.button("Send Reset Link", key="fp_btn"):
+                    if fp_contact:
+                        succ, msg = db.initiate_password_reset(fp_contact)
+                        if succ:
+                            st.success(msg)
+                        else:
+                            st.error(msg)
+                    else:
+                        st.warning("Please enter your email or phone.")
                     
         with tab2:
-            st.markdown("<br>", unsafe_allow_html=True)
-            new_user = st.text_input("New Username", key="new_user")
-            new_email = st.text_input("Email Address", key="new_email")
-            new_pass = st.text_input("Choose Password", type="password", key="new_pass")
-            
-            if st.button("Create Account", use_container_width=True):
-                if new_user and new_pass:
-                    success, msg = db.create_user(new_user, new_pass, new_email)
-                    if success:
-                        st.success(msg)
-                        st.info("Account created!")
+            with st.form("signup_form"):
+                # New Signup Flow: Company First
+                new_company = st.text_input("Company / Store Name", key="new_company_input")
+                new_user = st.text_input("Admin Username", key="new_user_input")
+                new_email = st.text_input("Email Address", key="new_email_input")
+                new_pass = st.text_input("Choose Password", type="password", key="new_pass_input")
+                
+                if st.form_submit_button("Create Account", use_container_width=True):
+                    if new_company and new_user and new_pass:
+                        # Call new Multi-Tenant Creator
+                        success, msg = db.create_company_account(new_company, new_user, new_pass, new_email)
+                        if success:
+                            st.success(msg)
+                            st.info("Account created! Please Sign In.")
+                        else:
+                            st.error(msg)
                     else:
-                        st.error(msg)
-                else:
-                    st.warning("All fields required")
+                        st.warning("All fields (Company, User, Pass) required")
         
         st.markdown('</div>', unsafe_allow_html=True)
 
@@ -432,11 +495,12 @@ else:
     **Quick Status:**
     """)
 
-    # Quick Stats (if DB has data)
+    # Quick Stats (Scoped to Account)
     try:
+        aid = db.get_current_account_id()
         conn = db.get_connection()
-        product_count = pd.read_sql_query("SELECT COUNT(*) as count FROM products", conn).iloc[0]['count']
-        transaction_count = pd.read_sql_query("SELECT COUNT(*) as count FROM transactions", conn).iloc[0]['count']
+        product_count = pd.read_sql_query("SELECT COUNT(*) as count FROM products WHERE account_id = ?", conn, params=(aid,)).iloc[0]['count']
+        transaction_count = pd.read_sql_query("SELECT COUNT(*) as count FROM transactions WHERE account_id = ?", conn, params=(aid,)).iloc[0]['count']
         conn.close()
 
         col1, col2, col3 = st.columns(3)

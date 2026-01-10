@@ -125,20 +125,21 @@ def execute_parsed_command(parsed_result):
     try:
         conn = db.get_connection()
         c = conn.cursor()
+        aid = db.get_current_account_id()
         
         if action == 'ADD':
             # Add to stock
-            c.execute("UPDATE products SET stock_quantity = stock_quantity + ? WHERE id = ?", (qty, p_id))
+            c.execute("UPDATE products SET stock_quantity = stock_quantity + ? WHERE id = ? AND account_id = ?", (qty, p_id, aid))
             msg = f"Added {qty} to {parsed_result['product_name']}"
             
         elif action == 'SET':
             # Set exact stock
-            c.execute("UPDATE products SET stock_quantity = ? WHERE id = ?", (qty, p_id))
+            c.execute("UPDATE products SET stock_quantity = ? WHERE id = ? AND account_id = ?", (qty, p_id, aid))
             msg = f"Set {parsed_result['product_name']} stock to {qty}"
             
         elif action == 'REMOVE':
             # Deduct
-            c.execute("UPDATE products SET stock_quantity = max(0, stock_quantity - ?) WHERE id = ?", (qty, p_id))
+            c.execute("UPDATE products SET stock_quantity = max(0, stock_quantity - ?) WHERE id = ? AND account_id = ?", (qty, p_id, aid))
             msg = f"Removed {qty} from {parsed_result['product_name']}"
             
         conn.commit()

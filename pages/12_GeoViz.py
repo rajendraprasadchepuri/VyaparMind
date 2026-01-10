@@ -42,13 +42,14 @@ with st.expander("🔧 Dev Tools: Impute Mock City Data"):
         # We need a direct update hack here for demo
         import secrets
         cities = ["Mumbai", "Delhi", "Bangalore", "Pune", "Hyderabad", "Sector 15", "Sector 22"]
+        aid = db.get_current_account_id()
         conn = db.get_connection()
         c = conn.cursor()
-        c.execute("SELECT id FROM customers")
+        c.execute("SELECT id FROM customers WHERE account_id = ?", (aid,))
         ids = c.fetchall()
         for i in ids:
             curr_city = secrets.choice(cities)
-            c.execute("UPDATE customers SET city = ? WHERE id = ?", (curr_city, i[0]))
+            c.execute("UPDATE customers SET city = ? WHERE id = ? AND account_id = ?", (curr_city, i[0], aid))
         conn.commit()
         conn.close()
         st.success("Mock Data Injected! Refresh page.")

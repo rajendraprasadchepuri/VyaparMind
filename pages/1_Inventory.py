@@ -56,7 +56,11 @@ if not df.empty:
         st.warning(f"⚠️ {len(low_stock)} items are low on stock!")
 
     # Search
-    search_term = st.text_input("🔍 Search Products", "")
+    with st.form("search_form_inventory"):
+        search_term = st.text_input("🔍 Search Products", "")
+        if st.form_submit_button("Search"):
+            pass # Form submission triggers rerun which applies filter below
+    
     if search_term:
         df = df[df['name'].str.contains(search_term, case=False)]
 
