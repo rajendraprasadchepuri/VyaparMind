@@ -138,6 +138,61 @@ if not st.session_state["authenticated"]:
             justify-content: center;
         }
 
+        /* --- RESPONSIVENESS MEDIA QUERIES --- */
+        @media screen and (max-width: 992px) {
+            /* Tablet: Stack Columns */
+            [data-testid="stHorizontalBlock"] {
+                flex-direction: column !important;
+            }
+            div[data-testid="stColumn"] {
+                width: 100% !important;
+                min-height: auto !important;
+                padding: 2rem !important;
+            }
+            div[data-testid="stColumn"]:nth-of-type(1) {
+                height: 40vh !important; /* Shorter Hero on Tablet */
+            }
+            .brand-logo-img {
+                width: 250px !important;
+                margin-bottom: -50px !important;
+            }
+            .brand-title {
+                font-size: 2.5rem !important;
+            }
+            .brand-desc {
+                display: none; /* Hide description on tablets to save space */
+            }
+        }
+
+        @media screen and (max-width: 480px) {
+            /* Mobile Specifics */
+            div[data-testid="stColumn"]:nth-of-type(1) {
+                height: 30vh !important; /* Even shorter on mobile */
+                padding: 1rem !important;
+            }
+            .brand-logo-img {
+                width: 180px !important;
+                margin-bottom: -40px !important;
+            }
+            .brand-title {
+                font-size: 2rem !important;
+            }
+            .brand-tagline {
+                font-size: 0.8rem !important;
+                letter-spacing: 1px !important;
+            }
+            .auth-header {
+                font-size: 2.2rem !important;
+            }
+            .auth-sub {
+                font-size: 1rem !important;
+                margin-bottom: 1.5rem !important;
+            }
+            div[data-testid="stColumn"]:nth-of-type(2) {
+                padding: 1.5rem !important;
+            }
+        }
+
         /* --- CONTENT STYLING --- */
         .brand-content {
             z-index: 10;

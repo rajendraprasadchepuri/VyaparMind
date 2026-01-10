@@ -146,6 +146,87 @@ def render_sidebar():
             box-shadow: none;
         }
 
+        /* --- GLOBAL LAYOUT FIXES --- */
+        
+        /* 1. Prevent Tables from overflowing into other columns */
+        div.stDataFrame {
+            width: 100% !important;
+            max-width: 100% !important;
+            overflow-x: auto !important;
+            display: block !important;
+        }
+        
+        /* 2. Ensure Columns have breathing room */
+        [data-testid="stHorizontalBlock"] {
+            gap: 1rem !important;
+        }
+
+        /* 3. Metric Cards shouldn't bulge */
+        [data-testid="stMetric"] {
+            overflow-wrap: break-word;
+            white-space: normal !important;
+        }
+
+        /* --- RESPONSIVENESS IMPROVEMENTS (MOBILE) --- */
+        @media screen and (max-width: 768px) {
+             /* Force metrics to stack or wrap better */
+            [data-testid="stMetric"] {
+                min-width: 100% !important;
+                margin-bottom: 10px !important;
+            }
+            
+            /* Adjust Top Header Spacing */
+            .block-container {
+                padding-left: 1rem !important;
+                padding-right: 1rem !important;
+            }
+            
+            /* Sidebar robustness on mobile */
+            section[data-testid="stSidebar"] {
+                width: 250px !important;
+            }
+            
+            /* CRITICAL: Force Columns to Wrap on Mobile */
+            /* This effectively turns multi-column layouts into stacked or wrapped grids */
+            [data-testid="stHorizontalBlock"] {
+                flex-wrap: wrap !important;
+            }
+            [data-testid="stColumn"] {
+                min-width: 100% !important; /* Force stack on very small screens */
+                flex: 1 1 100% !important;
+            }
+            
+            /* Reset gap for stacked items */
+            [data-testid="stHorizontalBlock"] {
+                gap: 0.5rem !important;
+            }
+        }
+
+        /* Tabs & Expander Polish */
+        div.stTabs [data-baseweb="tab"] {
+            font-size: 1rem !important;
+            font-weight: 700 !important;
+            color: #4D4D4D !important;
+        }
+        div.stTabs [data-baseweb="tab"]:hover {
+            color: #009FDF !important;
+        }
+        div.stTabs [aria-selected="true"] {
+            color: #009FDF !important;
+            border-bottom-color: #009FDF !important;
+        }
+
+        [data-testid="stExpander"] {
+            border: 1px solid #E6E7E8 !important;
+            border-left: 4px solid #009FDF !important;
+            background-color: #FFFFFF !important;
+            border-radius: 2px !important;
+        }
+        [data-testid="stExpander"] summary {
+            font-weight: 700 !important;
+            color: #4D4D4D !important;
+        }
+
 
         /* HIDE Native Navigation completely */
         [data-testid="stSidebarNav"] {
