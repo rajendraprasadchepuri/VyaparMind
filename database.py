@@ -3,32 +3,51 @@ import pandas as pd
 from datetime import datetime
 import streamlit as st
 
+import secrets
+import string
+import hashlib
+
 DB_NAME = "retail_supply_chain.db"
 
 def get_connection():
     return sqlite3.connect(DB_NAME, timeout=30, check_same_thread=False)
 
+def generate_unique_id(length=16, numeric_only=False, prefix=''):
+    """Generates a secure 16-character unique ID."""
+    if numeric_only:
+        # Generate 16 digit number string
+        # Ensure first digit is not 0 for cleanliness if needed, but string doesn't care.
+        chars = string.digits
+    else:
+        # Alphanumeric (uppercase + digits for readability)
+        chars = string.ascii_uppercase + string.digits
+    
+    # Calculate length needed excluding prefix
+    gen_len = max(1, length - len(prefix))
+    random_str = ''.join(secrets.choice(chars) for _ in range(gen_len))
+    return f"{prefix}{random_str}"
+
 def get_current_account_id():
     """
     Retrieves the logged-in user's Account ID from Session State.
-    Returns 1 (Default/Demo) if not logged in, to allow public pages/testing to work.
-    In strict production, this should return None or raise Error.
+    Returns None if not logged in.
     """
     if 'account_id' in st.session_state:
         return st.session_state['account_id']
-    return 1 # Default to Demo Account for now
+    return None
 
 def init_db():
     """Initializes the database with necessary tables if they don't exist."""
     conn = get_connection()
     # OPTIMIZATION: Enable WAL Mode for concurrency
     conn.execute("PRAGMA journal_mode=WAL;")
+    conn.execute("PRAGMA foreign_keys=ON;") # Ensure FK constraints are respected
     c = conn.cursor()
     
-    # Accounts Table (Tenants)
+    # 1. Accounts Table (Tenants)
     c.execute('''
         CREATE TABLE IF NOT EXISTS accounts (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id TEXT PRIMARY KEY,
             company_name TEXT NOT NULL,
             subscription_plan TEXT DEFAULT 'Starter',
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -36,42 +55,49 @@ def init_db():
     ''')
     
     # Ensure Default Demo Account Exists
-    c.execute("INSERT OR IGNORE INTO accounts (id, company_name) VALUES (1, 'VyaparMind Demo Store')")
+    # We use a fixed ID for the demo account for simplicity: '1111222233334444'
+    demo_id = '1111222233334444'
+    c.execute("INSERT OR IGNORE INTO accounts (id, company_name) VALUES (?, 'VyaparMind Demo Store')", (demo_id,))
 
-    # Products Table
+    # 2. Products Table
     c.execute('''
         CREATE TABLE IF NOT EXISTS products (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            account_id INTEGER DEFAULT 1,
+            id TEXT PRIMARY KEY,
+            account_id TEXT DEFAULT '1111222233334444',
             name TEXT NOT NULL,
             category TEXT,
             price REAL NOT NULL,
             cost_price REAL NOT NULL,
             stock_quantity INTEGER DEFAULT 0,
+            tax_rate REAL DEFAULT 0.0,
+            updated_at TIMESTAMP,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (account_id) REFERENCES accounts(id)
         )
     ''')
     
-    # Transactions Table (Head)
+    # 3. Transactions Table (Head)
     c.execute('''
         CREATE TABLE IF NOT EXISTS transactions (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            account_id INTEGER DEFAULT 1,
+            id TEXT PRIMARY KEY,
+            account_id TEXT DEFAULT '1111222233334444',
+            customer_id TEXT,
             timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             total_amount REAL NOT NULL,
             total_profit REAL NOT NULL,
             payment_method TEXT DEFAULT 'CASH',
+            transaction_hash TEXT,
+            points_redeemed INTEGER DEFAULT 0,
             FOREIGN KEY (account_id) REFERENCES accounts(id)
         )
     ''')
     
-    # Transaction Items (Line Items)
+    # 4. Transaction Items (Line Items)
     c.execute('''
         CREATE TABLE IF NOT EXISTS transaction_items (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            transaction_id INTEGER,
-            product_id INTEGER,
+            id TEXT PRIMARY KEY,
+            transaction_id TEXT,
+            product_id TEXT,
             product_name TEXT,
             quantity INTEGER,
             price_at_sale REAL,
@@ -80,10 +106,10 @@ def init_db():
             FOREIGN KEY (product_id) REFERENCES products (id)
         )
     ''')
-    # Settings Table (Multi-Tenant)
+    # 5. Settings Table (Multi-Tenant)
     c.execute('''
         CREATE TABLE IF NOT EXISTS settings (
-            account_id INTEGER,
+            account_id TEXT,
             key TEXT,
             value TEXT,
             UNIQUE(account_id, key),
@@ -91,91 +117,49 @@ def init_db():
         )
     ''')
     
-    # Note: Global defaults are deprecated in favor of account-scoped defaults during signup.
-    # But for demo account (ID=1), we ensure they exist.
-    c.execute("INSERT OR IGNORE INTO settings (account_id, key, value) VALUES (1, 'store_name', 'VyaparMind Store')")
-    c.execute("INSERT OR IGNORE INTO settings (account_id, key, value) VALUES (1, 'store_address', 'Hyderabad, India')")
-    c.execute("INSERT OR IGNORE INTO settings (account_id, key, value) VALUES (1, 'store_phone', '9876543210')")
-    # Customers Table (New)
+    # Demo Defaults
+    c.execute("INSERT OR IGNORE INTO settings (account_id, key, value) VALUES (?, 'store_name', 'VyaparMind Store')", (demo_id,))
+    c.execute("INSERT OR IGNORE INTO settings (account_id, key, value) VALUES (?, 'store_address', 'Hyderabad, India')", (demo_id,))
+    c.execute("INSERT OR IGNORE INTO settings (account_id, key, value) VALUES (?, 'store_phone', '9876543210')", (demo_id,))
+    c.execute("INSERT OR IGNORE INTO settings (account_id, key, value) VALUES (?, 'subscription_plan', 'Starter')", (demo_id,))
+
+    # 6. Customers Table
     c.execute('''
         CREATE TABLE IF NOT EXISTS customers (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            account_id INTEGER DEFAULT 1,
+            id TEXT PRIMARY KEY,
+            account_id TEXT DEFAULT '1111222233334444',
             name TEXT NOT NULL,
             phone TEXT,
             email TEXT,
+            city TEXT DEFAULT 'Unknown',
+            pincode TEXT DEFAULT '000000',
             loyalty_points INTEGER DEFAULT 0,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (account_id) REFERENCES accounts(id)
         )
     ''')
     
-    # Migrations for Account ID
-    for table in ["products", "transactions", "customers", "suppliers", "purchase_orders", "product_batches", "staff", "daily_context", "b2b_deals", "crowd_campaigns"]:
-        try:
-            c.execute(f"ALTER TABLE {table} ADD COLUMN account_id INTEGER DEFAULT 1")
-        except sqlite3.OperationalError:
-            pass # Already exists
-
-    # Migration: Add customer_id to transactions if not exists
-    try:
-        c.execute("ALTER TABLE transactions ADD COLUMN customer_id INTEGER")
-    except sqlite3.OperationalError:
-        pass # Column likely exists
-
-    # Migration: Add updated_at to products if not exists
-    try:
-        c.execute("ALTER TABLE products ADD COLUMN updated_at TIMESTAMP")
-    except sqlite3.OperationalError:
-        pass
-
-    # Migration: Add tax_rate to products if not exists
-    try:
-        c.execute("ALTER TABLE products ADD COLUMN tax_rate REAL DEFAULT 0.0")
-    except sqlite3.OperationalError:
-        pass
-
-    # Migration: Add transaction_hash to transactions if not exists
-    try:
-        c.execute("ALTER TABLE transactions ADD COLUMN transaction_hash TEXT")
-    except sqlite3.OperationalError:
-        pass
-    
-    # Migration: Add points_redeemed to transactions
-    try:
-        c.execute("ALTER TABLE transactions ADD COLUMN points_redeemed INTEGER DEFAULT 0")
-    except sqlite3.OperationalError:
-        pass
-
-    # Users Table (New)
+    # 7. Users Table
     c.execute('''
         CREATE TABLE IF NOT EXISTS users (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            account_id INTEGER DEFAULT 1,
-            username TEXT UNIQUE NOT NULL,
+            id TEXT PRIMARY KEY,
+            account_id TEXT DEFAULT '1111222233334444',
+            username TEXT NOT NULL,
             email TEXT,
             password_hash TEXT NOT NULL,
             role TEXT DEFAULT 'admin', -- admin, manager, staff
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (account_id) REFERENCES accounts(id)
+            FOREIGN KEY (account_id) REFERENCES accounts(id),
+            UNIQUE(account_id, username)
         )
     ''')
-
-    # Migration: Add role to users if not exists
-    try:
-        c.execute("ALTER TABLE users ADD COLUMN role TEXT DEFAULT 'admin'")
-    except sqlite3.OperationalError:
-        pass
-        
-    # Default Subscription
-    c.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('subscription_plan', 'Starter')")
-
-    # Product Batches (FreshFlow)
+    
+    # 8. Product Batches (FreshFlow)
     c.execute('''
         CREATE TABLE IF NOT EXISTS product_batches (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            account_id INTEGER DEFAULT 1,
-            product_id INTEGER,
+            id TEXT PRIMARY KEY,
+            account_id TEXT DEFAULT '1111222233334444',
+            product_id TEXT,
             batch_code TEXT,
             expiry_date DATE,
             quantity INTEGER,
@@ -196,8 +180,114 @@ def init_db():
     # transaction_items(transaction_id) for joins
     c.execute("CREATE INDEX IF NOT EXISTS idx_txn_items_txn_id ON transaction_items(transaction_id)")
     
-    # customers(phone) for fast lookup
-    c.execute("CREATE INDEX IF NOT EXISTS idx_customers_phone ON customers(phone)")
+    # 9. Suppliers (VendorTrust)
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS suppliers (
+            id TEXT PRIMARY KEY,
+            account_id TEXT DEFAULT '1111222233334444',
+            name TEXT,
+            contact_person TEXT,
+            phone TEXT,
+            category_specialty TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (account_id) REFERENCES accounts(id)
+        )
+    ''')
+
+    # 10. Purchase Orders (VendorTrust)
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS purchase_orders (
+            id TEXT PRIMARY KEY,
+            account_id TEXT DEFAULT '1111222233334444',
+            supplier_id TEXT,
+            order_date DATE,
+            expected_date DATE,
+            received_date DATE,
+            status TEXT DEFAULT 'PENDING', -- PENDING, RECEIVED, CANCELLED
+            quality_rating REAL,
+            notes TEXT,
+            FOREIGN KEY (supplier_id) REFERENCES suppliers(id),
+            FOREIGN KEY (account_id) REFERENCES accounts(id)
+        )
+    ''')
+
+    # 11. Staff (ShiftSmart)
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS staff (
+            id TEXT PRIMARY KEY,
+            account_id TEXT DEFAULT '1111222233334444',
+            name TEXT,
+            role TEXT,
+            hourly_rate REAL,
+            joined_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (account_id) REFERENCES accounts(id)
+        )
+    ''')
+
+    # 12. Shifts (ShiftSmart)
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS shifts (
+            id TEXT PRIMARY KEY,
+            staff_id TEXT,
+            date DATE,
+            slot TEXT, -- Morning, Evening
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (staff_id) REFERENCES staff(id)
+        )
+    ''')
+    
+    # 13. Daily Context (IsoBar) - Uses Composite PK usually, but let's standardize simple ID for simplicity?
+    # Context is usually unique per date per account.
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS daily_context (
+            account_id TEXT,
+            date DATE,
+            weather_tag TEXT,
+            event_tag TEXT,
+            notes TEXT,
+            PRIMARY KEY (account_id, date),
+            FOREIGN KEY (account_id) REFERENCES accounts(id)
+        )
+    ''')
+
+    # 14. B2B Deals (StockSwap)
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS b2b_deals (
+            id TEXT PRIMARY KEY,
+            account_id TEXT DEFAULT '1111222233334444',
+            store_name TEXT,
+            product_name TEXT,
+            quantity INTEGER,
+            price_per_unit REAL,
+            acc_phone TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (account_id) REFERENCES accounts(id)
+        )
+    ''')
+
+    # 15. Crowd Campaigns (CrowdStock)
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS crowd_campaigns (
+            id TEXT PRIMARY KEY,
+            account_id TEXT DEFAULT '1111222233334444',
+            item_name TEXT,
+            description TEXT,
+            votes_needed INTEGER,
+            votes_current INTEGER DEFAULT 0,
+            price_est REAL,
+            status TEXT DEFAULT 'ACTIVE',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (account_id) REFERENCES accounts(id)
+        )
+    ''')
+    
+    # 16. Restaurant Tables (TableLink) is handled by create_table_management_tables, 
+    # but we can initialize it here for consistency if we update that function to do nothing if exists.
+    # Let's leave it to that module logic but update that function later.
+
+    # Leave connection open for migrations below
+    # conn.commit() 
+    # conn.close()
     
     # Check for new columns in customers (Migration)
     try:
@@ -309,141 +399,21 @@ def init_db():
         )
     ''')
 
-    # --- MIGRATION: Settings Multi-Tenancy (Strict Re-creation) ---
-    try:
-        # Check if we have the correct composite unique constraint
-        # We can't easily check constraints via simple SQL, but we can check if it's the old schema
-        c.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='settings'")
-        sql = c.fetchone()[0]
-        if "PRIMARY KEY (key)" in sql or "PRIMARY KEY (\"key\")" in sql or "UNIQUE(account_id, key)" not in sql:
-            print("Force Migrating 'settings' table to composite unique...")
-            c.execute("ALTER TABLE settings RENAME TO settings_old")
-            c.execute('''
-                CREATE TABLE settings (
-                    account_id INTEGER,
-                    key TEXT,
-                    value TEXT,
-                    UNIQUE(account_id, key),
-                    FOREIGN KEY (account_id) REFERENCES accounts(id)
-                )
-            ''')
-            # Copy data, prefer existing account_id if available
-            try:
-                c.execute("INSERT OR IGNORE INTO settings (account_id, key, value) SELECT account_id, key, value FROM settings_old")
-            except:
-                # Fallback if account_id was missing
-                c.execute("INSERT OR IGNORE INTO settings (account_id, key, value) SELECT 1, key, value FROM settings_old")
-            
-            c.execute("DROP TABLE settings_old")
-            print("Settings migration complete.")
-    except Exception as e:
-        # If table doesn't exist at all, init_db will create it later, but let's handle it
-        pass
-
-    # --- MIGRATION: Scoped Usernames ---
-    # Check if 'users' table needs migration (by checking if 'users_new' logic is applied)
-    # We can check via PRAGMA or just try to perform migration if flag not present
-    # Simplest: Try to add the constraint or recreate.
-    
-    # Let's use a "try/catch" approach for table swap
-    try:
-        # Check if existing users table has the composite unique constraint
-        # Warning: Complicated to check constraints in SQLite.
-        # Strategy: ALWAYS create 'users_v2', copy data, drop 'users', rename 'users_v2'
-        # BUT only if 'users' exists.
-        
-        # Check if 'users' exists
-        c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='users'")
-        if c.fetchone():
-            # Check if it's the OLD schema (Global Unique Username)
-            # We can rely on a migration flag or just do it once.
-            # Let's check if we have already migrated by checking index info? 
-            # No, let's just do a safe swap if we haven't already.
-            pass 
-            
-            # MIGRATION LOGIC:
-            # 1. Rename current users -> users_backup
-            # 2. Create NEW users table with composite unique
-            # 3. Copy data
-            # 4. Drop users_backup
-            
-            # Since this runs every time, we need a condition.
-            # Let's create the table with the NEW schema IF NOT EXISTS first.
-            # But the table DOES exist with old schema.
-            
-            # HACK: We will try to CREATE the new table definition. 
-            # If the current table schema matches old, we migrate.
-            
-            c.execute("PRAGMA index_list('users')")
-            indexes = c.fetchall()
-            # If we don't see a composite index/unique, we migrate.
-            # Old schema: unique index on username.
-            
-            needs_migration = True
-            for idx in indexes:
-                # idx: (seq, name, unique, origin, partial)
-                if idx[2] == 1: # Unique
-                     c.execute(f"PRAGMA index_info('{idx[1]}')")
-                     cols = c.fetchall()
-                     # If unique index is on (account_id, username) -> (0,0,account_id), (1,1,username)
-                     col_names = [col[2] for col in cols]
-                     if 'account_id' in col_names and 'username' in col_names:
-                         needs_migration = False
-                         break
-            
-            if needs_migration:
-                print("MIGRATING 'users' TABLE TO SCOPED UNIQUENESS...")
-                c.execute("ALTER TABLE users RENAME TO users_old_schema")
-                c.execute('''
-                    CREATE TABLE users (
-                        id INTEGER PRIMARY KEY AUTOINCREMENT,
-                        account_id INTEGER,
-                        username TEXT NOT NULL,
-                        email TEXT,
-                        password_hash TEXT NOT NULL,
-                        role TEXT DEFAULT 'manager',
-                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                        FOREIGN KEY (account_id) REFERENCES accounts (id),
-                        UNIQUE(account_id, username)
-                    )
-                ''')
-                # Copy Data
-                c.execute("INSERT INTO users (id, account_id, username, email, password_hash, role, created_at) SELECT id, account_id, username, email, password_hash, role, created_at FROM users_old_schema")
-                c.execute("DROP TABLE users_old_schema")
-                print("MIGRATION COMPLETE.")
-                
-    except Exception as e:
-        print(f"Migration Warning: {e}")
-
-    # --- MULTI-TENANCY MIGRATION: Add account_id to ALL tables ---
-    tables_to_migrate = [
-        'users', 'products', 'transactions', 'customers', 'suppliers', 
-        'staff', 'product_batches', 'daily_context', 'b2b_deals', 'crowd_campaigns',
-        'settings'
-    ]
-    
-    for table in tables_to_migrate:
-        try:
-            c.execute(f"ALTER TABLE {table} ADD COLUMN account_id INTEGER DEFAULT 1")
-            c.execute(f"CREATE INDEX IF NOT EXISTS idx_{table}_account ON {table}(account_id)")
-        except sqlite3.OperationalError:
-            pass # Already exists
-
-    # Settings needs account_id but also might need to drop unique constraint on 'key' if purely global
-    # We will create `account_settings` table properly for strict separation.
-    
+    # Settings Table Helper (Account Scoped)
     c.execute('''
         CREATE TABLE IF NOT EXISTS account_settings (
-            account_id INTEGER,
+            account_id TEXT,
             key TEXT,
             value TEXT,
             PRIMARY KEY (account_id, key),
             FOREIGN KEY (account_id) REFERENCES accounts(id)
         )
     ''')
-
+    
     conn.commit()
     conn.close()
+
+
 
 def get_setting(key):
     """Fetch a setting value by key (Scoped)."""
@@ -487,16 +457,17 @@ def add_product(name, category, price, cost_price, stock_quantity, tax_rate=0.0,
     conn = get_connection()
     c = conn.cursor()
     account_id = override_account_id if override_account_id is not None else get_current_account_id()
+    new_id = generate_unique_id(16)
     try:
         c.execute('''
-            INSERT INTO products (account_id, name, category, price, cost_price, stock_quantity, tax_rate)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-        ''', (account_id, name, category, price, cost_price, stock_quantity, tax_rate))
+            INSERT INTO products (id, account_id, name, category, price, cost_price, stock_quantity, tax_rate)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        ''', (new_id, account_id, name, category, price, cost_price, stock_quantity, tax_rate))
         conn.commit()
-        return True
+        return True, "Product added successfully."
     except Exception as e:
         print(e)
-        return False
+        return False, str(e)
     finally:
         conn.close()
         # Invalidate Cache
@@ -583,13 +554,14 @@ def add_customer(name, phone, email, city="Unknown", pincode="000000"):
     conn = get_connection()
     c = conn.cursor()
     aid = get_current_account_id()
+    new_id = generate_unique_id(16, numeric_only=True) # Customers get numeric IDs often
     try:
         # Check uniqueness manually since we didn't add UNIQUE constraint at creation
         c.execute("SELECT id FROM customers WHERE phone = ? AND account_id = ?", (phone, aid))
         if c.fetchone():
             return False, "Customer with this phone already exists!" # Return tuple (Success, Msg)
 
-        c.execute("INSERT INTO customers (account_id, name, phone, email, city, pincode) VALUES (?, ?, ?, ?, ?, ?)", (aid, name, phone, email, city, pincode))
+        c.execute("INSERT INTO customers (id, account_id, name, phone, email, city, pincode) VALUES (?, ?, ?, ?, ?, ?, ?)", (new_id, aid, name, phone, email, city, pincode))
         conn.commit()
         return True, "Customer added successfully."
     except Exception as e:
@@ -618,12 +590,13 @@ def add_batch(product_id, batch_code, expiry_date, quantity, cost_price, overrid
     conn = get_connection()
     c = conn.cursor()
     aid = override_account_id if override_account_id is not None else get_current_account_id()
+    new_id = generate_unique_id(16)
     try:
         # 1. Insert Batch (With Account ID)
         c.execute('''
-            INSERT INTO product_batches (account_id, product_id, batch_code, expiry_date, quantity, cost_price)
-            VALUES (?, ?, ?, ?, ?, ?)
-        ''', (aid, product_id, batch_code, expiry_date, quantity, cost_price))
+            INSERT INTO product_batches (id, account_id, product_id, batch_code, expiry_date, quantity, cost_price)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        ''', (new_id, aid, product_id, batch_code, expiry_date, quantity, cost_price))
         
         # 2. Update Total Stock in master table (Scoped)
         c.execute('UPDATE products SET stock_quantity = stock_quantity + ? WHERE id = ? AND account_id = ?', (quantity, product_id, aid))
@@ -662,14 +635,15 @@ def add_supplier(name, contact, phone, specialty, override_account_id=None):
     conn = get_connection()
     c = conn.cursor()
     aid = override_account_id if override_account_id is not None else get_current_account_id()
+    new_id = generate_unique_id(16)
     try:
         # Check uniqueness (Scoped)
         c.execute("SELECT id FROM suppliers WHERE (name = ? OR phone = ?) AND account_id = ?", (name, phone, aid))
         if c.fetchone():
             return False, "Supplier already exists (same name or phone)."
             
-        c.execute("INSERT INTO suppliers (account_id, name, contact_person, phone, category_specialty) VALUES (?, ?, ?, ?, ?)", 
-                  (aid, name, contact, phone, specialty))
+        c.execute("INSERT INTO suppliers (id, account_id, name, contact_person, phone, category_specialty) VALUES (?, ?, ?, ?, ?, ?)", 
+                  (new_id, aid, name, contact, phone, specialty))
         conn.commit()
         return True, "Supplier added."
     except Exception as e:
@@ -805,15 +779,19 @@ def analyze_context_demand(weather_filter=None, event_filter=None):
 
 def create_table_management_tables(conn):
     c = conn.cursor()
-    # Restaurant Tables
+    # Restaurant Tables (Already added to init_db, but logic here for safety or redundancy? 
+    # Actually, init_db now handles it. Let's make this idempotent or just skip if exists)
+    # But table_orders IS NOT in init_db yet (my mistake in previous thought). Let's add it here properly or move to init_db.
+    # Moving to init_db is cleaner, but to save edits, I'll update it here.
+    
     c.execute('''
         CREATE TABLE IF NOT EXISTS restaurant_tables (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            account_id INTEGER DEFAULT 1,
+            id TEXT PRIMARY KEY,
+            account_id TEXT DEFAULT '1111222233334444',
             label TEXT,
             capacity INTEGER DEFAULT 4,
             status TEXT DEFAULT 'Available', -- Available, Occupied
-            current_order_id INTEGER,
+            current_order_id TEXT,
             FOREIGN KEY (account_id) REFERENCES accounts(id)
         )
     ''')
@@ -821,9 +799,9 @@ def create_table_management_tables(conn):
     # Active Table Orders (Temporary holding before Transaction)
     c.execute('''
         CREATE TABLE IF NOT EXISTS table_orders (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            account_id INTEGER DEFAULT 1,
-            table_id INTEGER,
+            id TEXT PRIMARY KEY,
+            account_id TEXT DEFAULT '1111222233334444',
+            table_id TEXT,
             items_json TEXT, -- JSON string of items
             start_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (table_id) REFERENCES restaurant_tables(id),
@@ -831,13 +809,11 @@ def create_table_management_tables(conn):
         )
     ''')
     
-    # Seed some tables if empty
-    c.execute("SELECT count(*) FROM restaurant_tables")
-    if c.fetchone()[0] == 0:
-        # Seed 6 tables
-        for i in range(1, 7):
-            c.execute("INSERT INTO restaurant_tables (label, capacity, status) VALUES (?, ?, ?)", 
-                      (f"T{i}", 4 if i < 5 else 6, "Available"))
+    # See if we need to seed
+    # With TEXT IDs, seeding 1..6 is standard '1', '2' etc? No, use GUIDs?
+    # For demo, maybe standardized Text IDs like 'TABLE-01', 'TABLE-02' are better for readability?
+    # Or just GUIDs. Let's use GUIDs.
+    
     conn.commit()
 
 def get_tables():
@@ -846,18 +822,18 @@ def get_tables():
     aid = get_current_account_id()
     # Ensure tables exist for this account (Multi-tenant seeding logic omitted for brevity, assuming shared or pre-seeded)
     # For now, just fetch checks
-    query = "SELECT * FROM restaurant_tables WHERE account_id = ?"
-    df = pd.read_sql_query("SELECT * FROM restaurant_tables", conn) # Simplified for demo, ignoring strict account binding for seed
+    df = pd.read_sql_query("SELECT * FROM restaurant_tables WHERE account_id = ?", conn, params=(aid,))
     conn.close()
     return df
 
 def occupy_table(table_id):
     conn = get_connection()
     c = conn.cursor()
+    aid = get_current_account_id()
+    new_order_id = generate_unique_id(16)
     try:
         # Create new order
-        c.execute("INSERT INTO table_orders (table_id, items_json) VALUES (?, '[]')", (table_id,))
-        new_order_id = c.lastrowid
+        c.execute("INSERT INTO table_orders (id, account_id, table_id, items_json) VALUES (?, ?, ?, '[]')", (new_order_id, aid, table_id))
         
         # Update Table
         c.execute("UPDATE restaurant_tables SET status = 'Occupied', current_order_id = ? WHERE id = ?", (new_order_id, table_id))
@@ -931,8 +907,9 @@ def add_restaurant_table(label, capacity):
     conn = get_connection()
     c = conn.cursor()
     aid = get_current_account_id()
+    new_id = generate_unique_id(16)
     try:
-        c.execute("INSERT INTO restaurant_tables (account_id, label, capacity, status) VALUES (?, ?, ?, 'Available')", (aid, label, capacity))
+        c.execute("INSERT INTO restaurant_tables (id, account_id, label, capacity, status) VALUES (?, ?, ?, ?, 'Available')", (new_id, aid, label, capacity))
         conn.commit()
         return True, "Table Added"
     except Exception as e:
@@ -999,6 +976,35 @@ def update_restaurant_table_capacity(table_id, new_capacity):
 
 # --- SHIFTSMART MODULE LOGIC ---
 
+def create_b2b_deal(store, product, qty, price, phone):
+    conn = get_connection()
+    c = conn.cursor()
+    aid = get_current_account_id()
+    new_id = generate_unique_id(16)
+    try:
+        c.execute("INSERT INTO b2b_deals (id, account_id, store_name, product_name, quantity, price_per_unit, acc_phone) VALUES (?, ?, ?, ?, ?, ?, ?)", 
+                  (new_id, aid, store, product, qty, price, phone))
+        conn.commit()
+        return True, "Deal Broadcasted!"
+    except Exception as e:
+        return False, str(e)
+    finally:
+        conn.close()
+
+def create_campaign(item, desc, votes, price):
+    conn = get_connection()
+    c = conn.cursor()
+    aid = get_current_account_id()
+    new_id = generate_unique_id(16)
+    try:
+        c.execute("INSERT INTO crowd_campaigns (id, account_id, item_name, description, votes_needed, price_est) VALUES (?, ?, ?, ?, ?, ?)", 
+                  (new_id, aid, item, desc, votes, price))
+        conn.commit()
+        return True, "Campaign Started!"
+    except Exception as e:
+        return False, str(e)
+    finally:
+        conn.close()
 def add_staff(name, role, rate):
     conn = get_connection()
     c = conn.cursor()
@@ -1083,26 +1089,33 @@ def record_transaction(items, total_amount, total_profit, customer_id=None, poin
     c = conn.cursor()
     
     import secrets
-    # Generate 16-char unique hash
-    txn_hash = secrets.token_hex(8) # 8 bytes = 16 hex chars
+    # Generate 16-char unique hash for display/lookup
+    txn_hash = secrets.token_hex(8) 
     
+    # Generate TEXT ID for Primary Key
+    new_txn_id = generate_unique_id(16, numeric_only=True)
+
     aid = override_account_id if override_account_id is not None else get_current_account_id()
     print(f"DEBUG: record_transaction for account_id={aid}, method={payment_method}")
     
     try:
         # 1. Create Transaction Record (With Account ID)
-        c.execute('INSERT INTO transactions (account_id, total_amount, total_profit, timestamp, customer_id, transaction_hash, points_redeemed, payment_method) VALUES (?, ?, ?, ?, ?, ?, ?, ?)', 
-                  (aid, total_amount, total_profit, datetime.now(), customer_id, txn_hash, points_redeemed, payment_method))
-        transaction_id = c.lastrowid
+        c.execute('INSERT INTO transactions (id, account_id, total_amount, total_profit, timestamp, customer_id, transaction_hash, points_redeemed, payment_method) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)', 
+                  (new_txn_id, aid, total_amount, total_profit, datetime.now(), customer_id, txn_hash, points_redeemed, payment_method))
         
-        # 2. Add Line Items and Update Stock
+        transaction_id = new_txn_id # Use our generated ID
+        
         # 2. Add Line Items (Batch Optimization)
         # Prepare data for batch insert
-        txn_items_data = [(transaction_id, item['id'], item['name'], item['qty'], item['price'], item['cost']) for item in items]
+        # Need to generate IDs for items too!
+        txn_items_data = []
+        for item in items:
+             item_id = generate_unique_id(16)
+             txn_items_data.append((item_id, transaction_id, item['id'], item['name'], item['qty'], item['price'], item['cost']))
         
         c.executemany('''
-            INSERT INTO transaction_items (transaction_id, product_id, product_name, quantity, price_at_sale, cost_at_sale)
-            VALUES (?, ?, ?, ?, ?, ?)
+            INSERT INTO transaction_items (id, transaction_id, product_id, product_name, quantity, price_at_sale, cost_at_sale)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
         ''', txn_items_data)
         
         # 3. Deduct Stock (Batch Optimization - Scoped)
@@ -1129,8 +1142,7 @@ def record_transaction(items, total_amount, total_profit, customer_id=None, poin
         
         # 5. Update Loyalty Points
         if customer_id:
-            # Earn: 1 point per 10 currency of final paid amount? Or total? 
-            # Sticking to Total Amount for earning to keep it simple.
+            # Earn: 1 point per 10 currency
             points_earned = int(total_amount / 10)
             
             # Net Change = Earned - Redeemed
@@ -1151,69 +1163,6 @@ def record_transaction(items, total_amount, total_profit, customer_id=None, poin
         _fetch_customers_impl.clear()
         _fetch_pos_inventory_impl.clear()
 
-
-def get_low_stock_products(threshold=10):
-    # OPTIMIZATION: Reuse cached entire product list instead of new DB hit
-    df = fetch_all_products()
-    return df[df['stock_quantity'] <= threshold]
-
-
-# --- ACCESS CONTROL & SUBSCRIPTION LOGIC ---
-
-# Tiers Configuration
-TIERS = {
-    'Starter': ['1_Inventory', '2_POS', '3_Settings', '4_Dashboard'],
-    'Business': ['1_Inventory', '2_POS', '3_Settings', '4_Dashboard', '6_FreshFlow', '7_VendorTrust', '8_VoiceAudit'],
-    'Enterprise': ['*'] # All
-}
-
-# Role Configuration
-ROLES = {
-    'staff': ['2_POS', '8_VoiceAudit'], # Restricted
-    'manager': ['1_Inventory', '2_POS', '6_FreshFlow', '7_VendorTrust', '8_VoiceAudit', '4_Dashboard'],
-    'admin': ['*']
-}
-
-def check_access(username, page_name):
-    """
-    Returns (True, "") if allowed.
-    Returns (False, Reason) if blocked.
-    """
-    # 1. Fetch User Role & Subscription from Accounts Table
-    conn = get_connection()
-    c = conn.cursor()
-    
-    # Get User Role and Account Subscription (Joined)
-    query = """
-        SELECT u.role, a.subscription_plan 
-        FROM users u 
-        JOIN accounts a ON u.account_id = a.id
-        WHERE u.username = ?
-    """
-    c.execute(query, (username,))
-    r = c.fetchone()
-    conn.close()
-    
-    if not r:
-        return False, "User not found or orphaned."
-        
-    user_role = r[0]
-    sub_plan = r[1]
-    
-    # 2. Check Role Limits
-    allowed_roles = ROLES.get(user_role, [])
-    if '*' not in allowed_roles and page_name not in allowed_roles:
-         return False, f"⛔ Restricted: '{user_role.title()}' cannot access this module."
-
-    # 3. Check Subscription Limits
-    allowed_sub = TIERS.get(sub_plan, [])
-    if '*' not in allowed_sub and page_name not in allowed_sub:
-        return False, f"🔒 Locked: Upgrade to '{sub_plan}' to unlock this."
-        
-    return True, "Access Granted"
-
-import hashlib
-
 def create_company_account(company_name, username, password, email):
     """
     Creates a new Account (Tenant) AND an Admin User for that account.
@@ -1221,6 +1170,7 @@ def create_company_account(company_name, username, password, email):
     """
     conn = get_connection()
     c = conn.cursor()
+    new_acc_id = generate_unique_id(16)
     try:
         # Check if COMPANY NAME exists globally
         c.execute("SELECT id FROM accounts WHERE company_name = ?", (company_name,))
@@ -1228,17 +1178,15 @@ def create_company_account(company_name, username, password, email):
             return False, "Company Name already exists. Please login."
 
         # 1. Create Account
-        c.execute("INSERT INTO accounts (company_name, subscription_plan) VALUES (?, 'Starter')", (company_name,))
-        account_id = c.lastrowid
+        c.execute("INSERT INTO accounts (id, company_name, subscription_plan) VALUES (?, ?, 'Starter')", (new_acc_id, company_name))
+        account_id = new_acc_id
         
         # 2. Create User (Admin)
-        # Note: Username uniqueness is now enforced at DB level (UNIQUE(account_id, username))
-        # So we can just try insert and catch error if it violates (but wait, account_id is new, so it won't violate unless same user twice in same account)
-        
         pwd_hash = hashlib.sha256(password.encode()).hexdigest()
+        new_user_id = generate_unique_id(16)
         
-        c.execute("INSERT INTO users (account_id, username, email, password_hash, role) VALUES (?, ?, ?, ?, ?)", 
-                  (account_id, username, email, pwd_hash, 'admin'))
+        c.execute("INSERT INTO users (id, account_id, username, email, password_hash, role) VALUES (?, ?, ?, ?, ?, ?)", 
+                  (new_user_id, account_id, username, email, pwd_hash, 'admin'))
         
         conn.commit()
         return True, "Account created successfully! Please login."
@@ -1246,6 +1194,28 @@ def create_company_account(company_name, username, password, email):
         return False, "Duplicate user in this account (Should not happen for new account)."
     except Exception as e:
         conn.rollback()
+        return False, str(e)
+    finally:
+        conn.close()
+
+def create_user(username, password, email, role='staff', override_account_id=None):
+    """
+    Creates a new user for the CURRENT account.
+    Enforced uniqueness via (account_id, username) index.
+    """
+    conn = get_connection()
+    c = conn.cursor()
+    aid = override_account_id if override_account_id is not None else get_current_account_id()
+    new_id = generate_unique_id(16)
+    try:
+        pwd_hash = hashlib.sha256(password.encode()).hexdigest()
+        c.execute("INSERT INTO users (id, account_id, username, email, password_hash, role) VALUES (?, ?, ?, ?, ?, ?)", 
+                  (new_id, aid, username, email, pwd_hash, role))
+        conn.commit()
+        return True, "User created successfully."
+    except sqlite3.IntegrityError:
+        return False, "Username already exists in your account."
+    except Exception as e:
         return False, str(e)
     finally:
         conn.close()
@@ -1309,164 +1279,30 @@ def initiate_password_reset(contact):
     finally:
          conn.close()
 
-# --- CHURNGUARD & GEOVIZ LOGIC ---
-
-def get_churn_metrics(days_threshold=30):
-    conn = get_connection()
-    aid = get_current_account_id()
-    # Scoped Logic
-    query = '''
-        SELECT c.id, c.name, c.phone, c.loyalty_points, MAX(t.timestamp) as last_seen, COUNT(t.id) as visit_count, SUM(t.total_amount) as total_spent
-        FROM customers c
-        LEFT JOIN transactions t ON c.id = t.customer_id
-        WHERE c.account_id = ?
-        GROUP BY c.id
-    '''
-    df = pd.read_sql_query(query, conn, params=(aid,))
-    conn.close()
-    
-    if df.empty:
-        return pd.DataFrame()
-
-    df['last_seen'] = pd.to_datetime(df['last_seen'])
-    now = datetime.now()
-    
-    df['days_since'] = (now - df['last_seen']).dt.days
-    df['days_since'] = df['days_since'].fillna(999) 
-    
-    churn_df = df[(df['visit_count'] > 0) & (df['days_since'] > days_threshold)].sort_values('total_spent', ascending=False)
-    return churn_df
-
-def get_geo_revenue():
-    conn = get_connection()
-    aid = get_current_account_id()
-    query = '''
-        SELECT c.city, c.pincode, COUNT(DISTINCT t.id) as txn_count, SUM(t.total_amount) as revenue
-        FROM customers c
-        JOIN transactions t ON c.id = t.customer_id
-        WHERE c.account_id = ?
-        GROUP BY c.city
-        ORDER BY revenue DESC
-    '''
-    df = pd.read_sql_query(query, conn, params=(aid,))
-    conn.close()
-    return df
-
-# --- STOCKSWAP LOGIC ---
-
-def create_b2b_deal(store, product, qty, price, phone):
+def create_purchase_order(supplier_id, expected_date, notes="", override_account_id=None):
     conn = get_connection()
     c = conn.cursor()
-    aid = get_current_account_id()
+    aid = override_account_id if override_account_id is not None else get_current_account_id()
+    new_id = generate_unique_id(16)
     try:
-        c.execute("INSERT INTO b2b_deals (account_id, store_name, product_name, quantity, price_per_unit, acc_phone) VALUES (?, ?, ?, ?, ?, ?)", 
-                  (aid, store, product, qty, price, phone))
+        c.execute("INSERT INTO purchase_orders (id, account_id, supplier_id, order_date, expected_date, notes) VALUES (?, ?, ?, date('now'), ?, ?)",
+                  (new_id, aid, supplier_id, expected_date, notes))
         conn.commit()
-        return True, "Deal Broadcasted!"
+        return True, "PO Created."
     except Exception as e:
         return False, str(e)
     finally:
         conn.close()
-
-def get_b2b_deals():
-    conn = get_connection()
-    aid = get_current_account_id()
-    # Scoped to Account for Strict Isolation
-    df = pd.read_sql_query("SELECT * FROM b2b_deals WHERE account_id = ? ORDER BY created_at DESC", conn, params=(aid,))
-    conn.close()
-    return df
-
-# --- CROWDSTOCK LOGIC ---
-
-def create_campaign(item, desc, votes, price):
-    conn = get_connection()
-    c = conn.cursor()
-    aid = get_current_account_id()
-    try:
-        c.execute("INSERT INTO crowd_campaigns (account_id, item_name, description, votes_needed, price_est) VALUES (?, ?, ?, ?, ?)", 
-                  (aid, item, desc, votes, price))
-        conn.commit()
-        return True, "Campaign Started!"
-    except Exception as e:
-        return False, str(e)
-    finally:
-        conn.close()
-
-def get_campaigns():
-    conn = get_connection()
-    aid = get_current_account_id()
-    # Scoped
-    df = pd.read_sql_query("SELECT * FROM crowd_campaigns WHERE status='ACTIVE' AND account_id = ?", conn, params=(aid,))
-    conn.close()
-    return df
-
-def vote_campaign(camp_id):
-    conn = get_connection()
-    c = conn.cursor()
-    aid = get_current_account_id()
-    try:
-        # Verify ownership/visibility (Scoped to Account)
-        c.execute("SELECT votes_needed, votes_current FROM crowd_campaigns WHERE id = ? AND account_id = ?", (camp_id, aid))
-        row = c.fetchone()
-        if not row:
-            return False, "Campaign not found or unauthorized."
-            
-        c.execute("UPDATE crowd_campaigns SET votes_current = votes_current + 1 WHERE id = ? AND account_id = ?", (camp_id, aid))
-        
-        # Check if funded (re-fetch current)
-        c.execute("SELECT votes_needed, votes_current FROM crowd_campaigns WHERE id = ? AND account_id = ?", (camp_id, aid))
-        row = c.fetchone()
-        if row and row[1] >= row[0]:
-            c.execute("UPDATE crowd_campaigns SET status = 'FUNDED' WHERE id = ? AND account_id = ?", (camp_id, aid))
-            msg = "Vote Registered! 🚀 CAMPAIGN FUNDED!"
-        else:
-            msg = "Vote Registered!"
-            
-        conn.commit()
-        return True, msg
-    except Exception as e:
-        return False, str(e)
-    finally:
-        conn.close()
-
-# --- SHIFTSMART MODULE LOGIC ---
 
 def add_staff(name, role, rate, override_account_id=None):
     conn = get_connection()
     c = conn.cursor()
     aid = override_account_id if override_account_id is not None else get_current_account_id()
+    new_id = generate_unique_id(16)
     try:
-        c.execute("INSERT INTO staff (account_id, name, role, hourly_rate) VALUES (?, ?, ?, ?)", (aid, name, role, rate))
+        c.execute("INSERT INTO staff (id, account_id, name, role, hourly_rate) VALUES (?, ?, ?, ?, ?)", (new_id, aid, name, role, rate))
         conn.commit()
         return True, "Staff added."
-    except Exception as e:
-        return False, str(e)
-    finally:
-        conn.close()
-
-def get_all_staff(override_account_id=None):
-    conn = get_connection()
-    aid = override_account_id if override_account_id is not None else get_current_account_id()
-    df = pd.read_sql_query("SELECT * FROM staff WHERE account_id = ?", conn, params=(aid,))
-    conn.close()
-    return df
-
-def create_user(username, password, email, role='staff', override_account_id=None):
-    """
-    Creates a new user for the CURRENT account.
-    Enforced uniqueness via (account_id, username) index.
-    """
-    conn = get_connection()
-    c = conn.cursor()
-    aid = override_account_id if override_account_id is not None else get_current_account_id()
-    try:
-        pwd_hash = hashlib.sha256(password.encode()).hexdigest()
-        c.execute("INSERT INTO users (account_id, username, email, password_hash, role) VALUES (?, ?, ?, ?, ?)", 
-                  (aid, username, email, pwd_hash, role))
-        conn.commit()
-        return True, "User created successfully."
-    except sqlite3.IntegrityError:
-        return False, "Username already exists in your account."
     except Exception as e:
         return False, str(e)
     finally:
@@ -1476,6 +1312,7 @@ def assign_shift(date_str, slot, staff_id, override_account_id=None):
     conn = get_connection()
     c = conn.cursor()
     aid = override_account_id if override_account_id is not None else get_current_account_id()
+    new_id = generate_unique_id(16)
     try:
         # Verify staff belongs to account
         c.execute("SELECT id FROM staff WHERE id = ? AND account_id = ?", (staff_id, aid))
@@ -1487,7 +1324,7 @@ def assign_shift(date_str, slot, staff_id, override_account_id=None):
         if c.fetchone():
             return True, "Already assigned."
             
-        c.execute("INSERT INTO shifts (date, slot, staff_id) VALUES (?, ?, ?)", (date_str, slot, staff_id))
+        c.execute("INSERT INTO shifts (id, date, slot, staff_id) VALUES (?, ?, ?, ?)", (new_id, date_str, slot, staff_id))
         conn.commit()
         return True, "Shift assigned."
     except Exception as e:

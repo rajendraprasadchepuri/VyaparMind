@@ -43,6 +43,119 @@ with st.expander("➕ Add New Product / Update Stock", expanded=False):
             else:
                 st.warning("Product Name is required.")
 
+# --- Bulk Upload Section ---
+with st.expander("📂 Bulk Upload Products (CSV/Excel/Txt)", expanded=False):
+    st.write("Upload a file with the following columns: **Product Name**, **Selling Price**, **Category**, **Cost Price**, **Stock Quantity**, **Tax Rate**")
+    
+    uploaded_file = st.file_uploader("Choose a file", type=['csv', 'xlsx', 'txt'])
+    
+    if uploaded_file is not None:
+        try:
+            # Determine file type and read
+            if uploaded_file.name.endswith('.csv'):
+                df_upload = pd.read_csv(uploaded_file)
+            elif uploaded_file.name.endswith('.xlsx'):
+                df_upload = pd.read_excel(uploaded_file)
+            elif uploaded_file.name.endswith('.txt'):
+                # Try comma first, then tab
+                try:
+                    df_upload = pd.read_csv(uploaded_file, sep=',')
+                    if len(df_upload.columns) < 2:
+                         uploaded_file.seek(0)
+                         df_upload = pd.read_csv(uploaded_file, sep='\t')
+                except:
+                     st.error("Could not parse text file. Please ensure it is CSV or Tab separated.")
+                     df_upload = None
+
+            if df_upload is not None:
+                # Column Normalization (strip whitespace, lower case for matching)
+                df_upload.columns = [c.strip() for c in df_upload.columns]
+                
+                # Check Required Columns (Flexible Name Matching)
+                required_map = {
+                    'product name': ['product name', 'name', 'item', 'product'],
+                    'selling price': ['selling price', 'price', 'mrp', 'rate'],
+                    'category': ['category', 'cat', 'type'],
+                    'cost price': ['cost price', 'cost', 'cp', 'buy price'],
+                    'stock quantity': ['stock quantity', 'stock', 'quantity', 'qty', 'count'],
+                    'tax rate': ['tax rate', 'tax', 'gst', 'vat']
+                }
+                
+                # Validation Logic
+                found_cols = {k: None for k in required_map}
+                missing_cols = []
+                
+                for req, alternatives in required_map.items():
+                    for col in df_upload.columns:
+                        if col.lower() in alternatives:
+                            found_cols[req] = col
+                            break
+                    if not found_cols[req]:
+                        # Optional fields logic? 
+                        # Requirements said all these columns. Let's enforce for now but maybe Defaults?
+                        # Tax Rate could be default 0. Category default "General".
+                        if req in ['tax rate', 'category']:
+                            pass # We can handle missing optional later
+                        else:
+                            missing_cols.append(req)
+
+                if missing_cols:
+                    st.error(f"Missing required columns: {', '.join(missing_cols)}")
+                    st.info(f"Expected header variations: {required_map}")
+                else:
+                    st.success("File columns verified! Processing...")
+                    
+                    if st.button("Start Import"):
+                        progress_bar = st.progress(0)
+                        success_count = 0
+                        errors = []
+                        
+                        total_rows = len(df_upload)
+                        
+                        for i, row in df_upload.iterrows():
+                            # Extract Values safely
+                            p_name = row[found_cols['product name']]
+                            p_price = row[found_cols['selling price']] if found_cols['selling price'] else 0.0
+                            p_cost = row[found_cols['cost price']] if found_cols['cost price'] else 0.0
+                            p_qty = row[found_cols['stock quantity']] if found_cols['stock quantity'] else 0
+                            
+                            # Optionals
+                            p_cat = row[found_cols['category']] if found_cols['category'] else "General"
+                            p_tax = row[found_cols['tax rate']] if found_cols['tax rate'] else 0.0
+                            
+                            # Type Conversion / Safety
+                            try:
+                                p_price = float(str(p_price).replace(',','').replace('₹',''))
+                                p_cost = float(str(p_cost).replace(',','').replace('₹',''))
+                                p_tax = float(str(p_tax).replace('%',''))
+                                p_qty = int(p_qty)
+                            except ValueError:
+                                errors.append(f"Row {i+1}: Invalid number format for {p_name}")
+                                continue
+
+                            # DB Insert
+                            status, msg = db.add_product(p_name, p_cat, p_price, p_cost, p_qty, p_tax)
+                            if status:
+                                success_count += 1
+                            else:
+                                errors.append(f"Row {i+1} ({p_name}): {msg}")
+                            
+                            progress_bar.progress((i + 1) / total_rows)
+                        
+                        st.balloons()
+                        st.success(f"Import Complete! Added {success_count} products.")
+                        if errors:
+                            with st.expander("View Import Errors"):
+                                for e in errors:
+                                    st.write(f"❌ {e}")
+                        
+                        import time
+                        time.sleep(2)
+                        st.rerun()
+
+        except Exception as e:
+            st.error(f"Error processing file: {e}")
+
 # --- Display Inventory ---
 st.subheader("Current Stock")
 
