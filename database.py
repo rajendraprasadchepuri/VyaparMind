@@ -2,15 +2,38 @@ import sqlite3
 import pandas as pd
 from datetime import datetime
 import streamlit as st
-
 import secrets
 import string
 import hashlib
+import json
+import config
 
-DB_NAME = "retail_supply_chain.db"
+# Try to import psycopg2 for Postgres support
+try:
+    import psycopg2
+    from psycopg2.extras import RealDictCursor, execute_values
+except ImportError:
+    psycopg2 = None
 
 def get_connection():
-    return sqlite3.connect(DB_NAME, timeout=30, check_same_thread=False)
+    """Returns a database connection based on the configured engine."""
+    if config.DB_TYPE == "POSTGRES":
+        if psycopg2 is None:
+            raise ImportError("psycopg2 is required for PostgreSQL support. Run 'pip install psycopg2-binary'")
+        
+        return psycopg2.connect(
+            host=config.PG_HOST,
+            port=config.PG_PORT,
+            database=config.PG_NAME,
+            user=config.PG_USER,
+            password=config.PG_PASS
+        )
+    else:
+        # Default to SQLite
+        return sqlite3.connect(config.SQLITE_DB, timeout=30, check_same_thread=False)
+
+# Global SQL Placeholder
+PLACEHOLDER = "%s" if config.DB_TYPE == "POSTGRES" else "?"
 
 def generate_unique_id(length=16, numeric_only=False, prefix=''):
     """Generates a secure 16-character unique ID."""
@@ -39,25 +62,31 @@ def get_current_account_id():
 def init_db():
     """Initializes the database with necessary tables if they don't exist."""
     conn = get_connection()
-    # OPTIMIZATION: Enable WAL Mode for concurrency
-    conn.execute("PRAGMA journal_mode=WAL;")
-    conn.execute("PRAGMA foreign_keys=ON;") # Ensure FK constraints are respected
     c = conn.cursor()
+
+    if config.DB_TYPE == "SQLITE":
+        # OPTIMIZATION: Enable WAL Mode for concurrency
+        conn.execute("PRAGMA journal_mode=WAL;")
+        conn.execute("PRAGMA foreign_keys=ON;") 
     
+    # helper for insert ignore
+    insert_ignore = "INSERT INTO accounts (id, company_name) VALUES (%s, %s) ON CONFLICT (id) DO NOTHING" if config.DB_TYPE == "POSTGRES" else "INSERT OR IGNORE INTO accounts (id, company_name) VALUES (?, ?)"
+    place = "%s" if config.DB_TYPE == "POSTGRES" else "?"
+
     # 1. Accounts Table (Tenants)
-    c.execute('''
+    c.execute(f'''
         CREATE TABLE IF NOT EXISTS accounts (
             id TEXT PRIMARY KEY,
             company_name TEXT NOT NULL,
             subscription_plan TEXT DEFAULT 'Starter',
+            status TEXT DEFAULT 'ACTIVE',
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     ''')
     
     # Ensure Default Demo Account Exists
-    # We use a fixed ID for the demo account for simplicity: '1111222233334444'
-    demo_id = '1111222233334444'
-    c.execute("INSERT OR IGNORE INTO accounts (id, company_name) VALUES (?, 'VyaparMind Demo Store')", (demo_id,))
+    demo_id = config.DEFAULT_ACCOUNT_ID
+    c.execute(insert_ignore, (demo_id, 'VyaparMind Demo Store'))
 
     # 2. Products Table
     c.execute('''
@@ -118,10 +147,11 @@ def init_db():
     ''')
     
     # Demo Defaults
-    c.execute("INSERT OR IGNORE INTO settings (account_id, key, value) VALUES (?, 'store_name', 'VyaparMind Store')", (demo_id,))
-    c.execute("INSERT OR IGNORE INTO settings (account_id, key, value) VALUES (?, 'store_address', 'Hyderabad, India')", (demo_id,))
-    c.execute("INSERT OR IGNORE INTO settings (account_id, key, value) VALUES (?, 'store_phone', '9876543210')", (demo_id,))
-    c.execute("INSERT OR IGNORE INTO settings (account_id, key, value) VALUES (?, 'subscription_plan', 'Starter')", (demo_id,))
+    insert_settings = "INSERT INTO settings (account_id, key, value) VALUES (%s, %s, %s) ON CONFLICT (account_id, key) DO NOTHING" if config.DB_TYPE == "POSTGRES" else "INSERT OR IGNORE INTO settings (account_id, key, value) VALUES (?, ?, ?)"
+    c.execute(insert_settings, (demo_id, 'store_name', 'VyaparMind Store'))
+    c.execute(insert_settings, (demo_id, 'store_address', 'Hyderabad, India'))
+    c.execute(insert_settings, (demo_id, 'store_phone', '9876543210'))
+    c.execute(insert_settings, (demo_id, 'subscription_plan', 'Starter'))
 
     # 6. Customers Table
     c.execute('''
@@ -147,13 +177,23 @@ def init_db():
             username TEXT NOT NULL,
             email TEXT,
             password_hash TEXT NOT NULL,
-            role TEXT DEFAULT 'admin', -- admin, manager, staff
+            role TEXT DEFAULT 'admin', -- admin, manager, staff, super_admin
             permissions TEXT, -- Comma separated list of allowed modules
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (account_id) REFERENCES accounts(id),
             UNIQUE(account_id, username)
         )
     ''')
+
+    # Ensure Default SuperAdmin User Exists for Demo Account
+    admin_user = "superadmin"
+    admin_pass = "admin123" # Default password
+    admin_hash = hashlib.sha256(admin_pass.encode()).hexdigest()
+    
+    insert_user = f"INSERT INTO users (id, account_id, username, email, password_hash, role) VALUES ({PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER}) ON CONFLICT (account_id, username) DO NOTHING" if config.DB_TYPE == "POSTGRES" else "INSERT OR IGNORE INTO users (id, account_id, username, email, password_hash, role) VALUES (?, ?, ?, ?, ?, ?)"
+    
+    # Using 'super_admin' role for dashboard access
+    c.execute(insert_user, (generate_unique_id(16), demo_id, admin_user, 'admin@vyaparmind.com', admin_hash, 'super_admin'))
     
     # 8. Product Batches (FreshFlow)
     c.execute('''
@@ -309,19 +349,21 @@ def init_db():
     c.execute("CREATE INDEX IF NOT EXISTS idx_batches_expiry ON product_batches(expiry_date)")
 
     # 9. Subscription Plans Table (Super Admin)
-    c.execute('''
+    # Postgres uses SERIAL for autoincrement
+    pk_auto = "SERIAL PRIMARY KEY" if config.DB_TYPE == "POSTGRES" else "INTEGER PRIMARY KEY AUTOINCREMENT"
+    c.execute(f'''
         CREATE TABLE IF NOT EXISTS subscription_plans (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT UNIQUE NOT NULL,
-            price REAL NOT NULL,
-            features TEXT,
+            id {pk_auto},
+            name TEXT UNIQUE,
+            price REAL,
+            modules TEXT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     ''')
     # Default Plans
-    c.execute("INSERT OR IGNORE INTO subscription_plans (name, price) VALUES ('Starter', 0)")
-    c.execute("INSERT OR IGNORE INTO subscription_plans (name, price) VALUES ('Professional', 2999)")
-    c.execute("INSERT OR IGNORE INTO subscription_plans (name, price) VALUES ('Enterprise', 9999)")
+    insert_plan = f"INSERT INTO subscription_plans (name, price) VALUES ({PLACEHOLDER}, {PLACEHOLDER}) ON CONFLICT (name) DO NOTHING" if config.DB_TYPE == "POSTGRES" else "INSERT OR IGNORE INTO subscription_plans (name, price) VALUES (?, ?)"
+    c.execute(insert_plan, ('Professional', 2999))
+    c.execute(insert_plan, ('Enterprise', 9999))
 
     # Migration: Accounts Status
     try:
@@ -350,7 +392,7 @@ def get_setting(key):
     c = conn.cursor()
     aid = get_current_account_id()
     # Check Account Specific Setting
-    c.execute("SELECT value FROM settings WHERE key = ? AND account_id = ?", (key, aid))
+    c.execute(f"SELECT value FROM settings WHERE key = {PLACEHOLDER} AND account_id = {PLACEHOLDER}", (key, aid))
     result = c.fetchone()
     conn.close()
     if result:
@@ -368,11 +410,11 @@ def set_setting(key, value):
     aid = get_current_account_id()
     try:
         # Check if exists for this account
-        c.execute("SELECT value FROM settings WHERE key = ? AND account_id = ?", (key, aid))
+        c.execute(f"SELECT value FROM settings WHERE key = {PLACEHOLDER} AND account_id = {PLACEHOLDER}", (key, aid))
         if c.fetchone():
-            c.execute("UPDATE settings SET value = ? WHERE key = ? AND account_id = ?", (value, key, aid))
+            c.execute(f"UPDATE settings SET value = {PLACEHOLDER} WHERE key = {PLACEHOLDER} AND account_id = {PLACEHOLDER}", (value, key, aid))
         else:
-            c.execute("INSERT INTO settings (account_id, key, value) VALUES (?, ?, ?)", (aid, key, value))
+            c.execute(f"INSERT INTO settings (account_id, key, value) VALUES ({PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER})", (aid, key, value))
             
         # SYNC: If updating subscription_plan, also update accounts table
         if key == 'subscription_plan':
@@ -393,10 +435,8 @@ def add_product(name, category, price, cost_price, stock_quantity, tax_rate=0.0,
     account_id = override_account_id if override_account_id is not None else get_current_account_id()
     new_id = generate_unique_id(16)
     try:
-        c.execute('''
-            INSERT INTO products (id, account_id, name, category, price, cost_price, stock_quantity, tax_rate)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        ''', (new_id, account_id, name, category, price, cost_price, stock_quantity, tax_rate))
+        c.execute(f"INSERT INTO products (id, account_id, name, category, price, cost_price, stock_quantity, tax_rate) VALUES ({PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER})",
+                  (new_id, account_id, name, category, price, cost_price, stock_quantity, tax_rate))
         conn.commit()
         return True, "Product added successfully."
     except Exception as e:
@@ -414,11 +454,8 @@ def update_product(product_id, price, cost_price, stock_quantity, tax_rate):
     c = conn.cursor()
     aid = get_current_account_id()
     try:
-        c.execute('''
-            UPDATE products 
-            SET price = ?, cost_price = ?, stock_quantity = ?, tax_rate = ?, updated_at = ?
-            WHERE id = ? AND account_id = ?
-        ''', (price, cost_price, stock_quantity, tax_rate, datetime.now(), product_id, aid))
+        c.execute(f"UPDATE products SET price = {PLACEHOLDER}, cost_price = {PLACEHOLDER}, stock_quantity = {PLACEHOLDER}, tax_rate = {PLACEHOLDER}, updated_at = {PLACEHOLDER} WHERE id = {PLACEHOLDER} AND account_id = {PLACEHOLDER}",
+                  (price, cost_price, stock_quantity, tax_rate, datetime.now(), product_id, aid))
         conn.commit()
         return True
     except Exception as e:
@@ -434,7 +471,7 @@ def _fetch_all_products_impl(account_id):
     """Internal cached fetcher."""
     conn = get_connection()
     # RLS: Filter by account_id
-    df = pd.read_sql_query("SELECT * FROM products WHERE account_id = ?", conn, params=(account_id,))
+    df = pd.read_sql_query(f"SELECT * FROM products WHERE account_id = {PLACEHOLDER}", conn, params=(account_id,))
     conn.close()
     return df
 
@@ -444,15 +481,13 @@ def fetch_all_products(search_term=None, override_account_id=None):
     search_term: Optional string to filter by name or category.
     """
     conn = get_connection()
-    aid = override_account_id if override_account_id is not None else get_current_account_id()
-    
-    query = "SELECT * FROM products WHERE account_id = ?"
+    aid = override_account_id if override_account_id else get_current_account_id()
+    query = f"SELECT * FROM products WHERE account_id = {PLACEHOLDER}"
     params = [aid]
     
     if search_term:
-        query += " AND (name LIKE ? OR category LIKE ?)"
-        wildcard = f"%{search_term}%"
-        params.extend([wildcard, wildcard])
+        query += f" AND (name ILIKE {PLACEHOLDER} OR category ILIKE {PLACEHOLDER})" if config.DB_TYPE=="POSTGRES" else f" AND (name LIKE {PLACEHOLDER} OR category LIKE {PLACEHOLDER})"
+        params.extend([f"%{search_term}%", f"%{search_term}%"])
         
     df = pd.read_sql_query(query, conn, params=params)
     conn.close()
@@ -492,7 +527,7 @@ def fetch_pos_inventory(search_term=None, limit=50, override_account_id=None):
     params = [aid]
     
     if search_term:
-        query += " AND (p.name LIKE ? OR p.category LIKE ?)"
+        query += f" AND (p.name ILIKE {PLACEHOLDER} OR p.category ILIKE {PLACEHOLDER})" if config.DB_TYPE=="POSTGRES" else f" AND (p.name LIKE {PLACEHOLDER} OR p.category LIKE {PLACEHOLDER})"
         wildcard = f"%{search_term}%"
         params.extend([wildcard, wildcard])
         
@@ -512,7 +547,7 @@ def fetch_pos_inventory(search_term=None, limit=50, override_account_id=None):
 def _fetch_customers_impl(account_id):
     """Internal cached fetcher."""
     conn = get_connection()
-    df = pd.read_sql_query("SELECT * FROM customers WHERE account_id = ?", conn, params=(account_id,))
+    df = pd.read_sql_query(f"SELECT * FROM customers WHERE account_id = {PLACEHOLDER}", conn, params=(account_id,))
     conn.close()
     return df
 
@@ -537,11 +572,11 @@ def add_customer(name, phone, email, city="Unknown", pincode="000000"):
     new_id = generate_unique_id(16, numeric_only=True) # Customers get numeric IDs often
     try:
         # Check uniqueness manually since we didn't add UNIQUE constraint at creation
-        c.execute("SELECT id FROM customers WHERE phone = ? AND account_id = ?", (phone, aid))
+        c.execute(f"SELECT id FROM customers WHERE phone = {PLACEHOLDER} AND account_id = {PLACEHOLDER}", (phone, aid))
         if c.fetchone():
             return False, "Customer with this phone already exists!" # Return tuple (Success, Msg)
 
-        c.execute("INSERT INTO customers (id, account_id, name, phone, email, city, pincode) VALUES (?, ?, ?, ?, ?, ?, ?)", (new_id, aid, name, phone, email, city, pincode))
+        c.execute(f"INSERT INTO customers (id, account_id, name, phone, email, city, pincode) VALUES ({PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER})", (new_id, aid, name, phone, email, city, pincode))
         conn.commit()
         return True, "Customer added successfully."
     except Exception as e:
@@ -556,7 +591,7 @@ def update_stock(product_id, quantity_change):
     conn = get_connection()
     c = conn.cursor()
     aid = get_current_account_id()
-    c.execute('UPDATE products SET stock_quantity = stock_quantity + ? WHERE id = ? AND account_id = ?', (quantity_change, product_id, aid))
+    c.execute(f'UPDATE products SET stock_quantity = stock_quantity + {PLACEHOLDER} WHERE id = {PLACEHOLDER} AND account_id = {PLACEHOLDER}', (quantity_change, product_id, aid))
     conn.commit()
     conn.close()
     # Invalidate Cache
@@ -573,13 +608,13 @@ def add_batch(product_id, batch_code, expiry_date, quantity, cost_price, overrid
     new_id = generate_unique_id(16)
     try:
         # 1. Insert Batch (With Account ID)
-        c.execute('''
+        c.execute(f'''
             INSERT INTO product_batches (id, account_id, product_id, batch_code, expiry_date, quantity, cost_price)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            VALUES ({PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER})
         ''', (new_id, aid, product_id, batch_code, expiry_date, quantity, cost_price))
         
         # 2. Update Total Stock in master table (Scoped)
-        c.execute('UPDATE products SET stock_quantity = stock_quantity + ? WHERE id = ? AND account_id = ?', (quantity, product_id, aid))
+        c.execute(f'UPDATE products SET stock_quantity = stock_quantity + {PLACEHOLDER} WHERE id = {PLACEHOLDER} AND account_id = {PLACEHOLDER}', (quantity, product_id, aid))
         
         conn.commit()
         return True, "Batch added successfully."
@@ -596,15 +631,26 @@ def get_expiring_batches(days_threshold=7, override_account_id=None):
     conn = get_connection()
     aid = override_account_id if override_account_id is not None else get_current_account_id()
     # Logic: expiry_date <= (today + threshold) AND quantity > 0
-    query = '''
-        SELECT b.*, p.name as product_name, p.price as current_price
-        FROM product_batches b
-        JOIN products p ON b.product_id = p.id
-        WHERE b.account_id = ? 
-        AND b.quantity > 0 
-        AND b.expiry_date <= date('now', '+' || ? || ' days')
-        ORDER BY b.expiry_date ASC
-    '''
+    if config.DB_TYPE == "POSTGRES":
+        query = f'''
+            SELECT b.*, p.name as product_name, p.price as current_price
+            FROM product_batches b
+            JOIN products p ON b.product_id = p.id
+            WHERE b.account_id = {PLACEHOLDER} 
+            AND b.quantity > 0 
+            AND b.expiry_date <= CURRENT_DATE + (interval '1 day' * {PLACEHOLDER})
+            ORDER BY b.expiry_date ASC
+        '''
+    else:
+        query = f'''
+            SELECT b.*, p.name as product_name, p.price as current_price
+            FROM product_batches b
+            JOIN products p ON b.product_id = p.id
+            WHERE b.account_id = {PLACEHOLDER} 
+            AND b.quantity > 0 
+            AND b.expiry_date <= date('now', '+' || {PLACEHOLDER} || ' days')
+            ORDER BY b.expiry_date ASC
+        '''
     df = pd.read_sql_query(query, conn, params=(aid, str(days_threshold)))
     conn.close()
     return df
@@ -618,11 +664,11 @@ def add_supplier(name, contact, phone, specialty, override_account_id=None):
     new_id = generate_unique_id(16)
     try:
         # Check uniqueness (Scoped)
-        c.execute("SELECT id FROM suppliers WHERE (name = ? OR phone = ?) AND account_id = ?", (name, phone, aid))
+        c.execute(f"SELECT id FROM suppliers WHERE (name = {PLACEHOLDER} OR phone = {PLACEHOLDER}) AND account_id = {PLACEHOLDER}", (name, phone, aid))
         if c.fetchone():
             return False, "Supplier already exists (same name or phone)."
             
-        c.execute("INSERT INTO suppliers (id, account_id, name, contact_person, phone, category_specialty) VALUES (?, ?, ?, ?, ?, ?)", 
+        c.execute(f"INSERT INTO suppliers (id, account_id, name, contact_person, phone, category_specialty) VALUES ({PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER})", 
                   (new_id, aid, name, contact, phone, specialty))
         conn.commit()
         return True, "Supplier added."
@@ -635,7 +681,7 @@ def get_all_suppliers(override_account_id=None):
     conn = get_connection()
     aid = override_account_id if override_account_id is not None else get_current_account_id()
     # Deduplicate view logic: Group by name/phone to hide dupes if they exist
-    df = pd.read_sql_query("SELECT * FROM suppliers WHERE account_id = ? GROUP BY name", conn, params=(aid,))
+    df = pd.read_sql_query(f"SELECT * FROM suppliers WHERE account_id = {PLACEHOLDER} GROUP BY name", conn, params=(aid,))
     conn.close()
     return df
 
@@ -644,7 +690,7 @@ def create_purchase_order(supplier_id, expected_date, notes="", override_account
     c = conn.cursor()
     aid = override_account_id if override_account_id is not None else get_current_account_id()
     try:
-        c.execute("INSERT INTO purchase_orders (account_id, supplier_id, order_date, expected_date, notes) VALUES (?, ?, date('now'), ?, ?)",
+        c.execute(f"INSERT INTO purchase_orders (account_id, supplier_id, order_date, expected_date, notes) VALUES ({PLACEHOLDER}, {PLACEHOLDER}, CURRENT_DATE, {PLACEHOLDER}, {PLACEHOLDER})",
                   (aid, supplier_id, expected_date, notes))
         conn.commit()
         return True, "PO Created."
@@ -656,11 +702,11 @@ def create_purchase_order(supplier_id, expected_date, notes="", override_account
 def get_open_pos():
     conn = get_connection()
     aid = get_current_account_id()
-    query = '''
+    query = f'''
         SELECT po.*, s.name as supplier_name 
         FROM purchase_orders po
         JOIN suppliers s ON po.supplier_id = s.id
-        WHERE po.status = 'PENDING' AND po.account_id = ?
+        WHERE po.status = 'PENDING' AND po.account_id = {PLACEHOLDER}
     '''
     df = pd.read_sql_query(query, conn, params=(aid,))
     conn.close()
@@ -671,10 +717,10 @@ def receive_purchase_order(po_id, quality_rating):
     c = conn.cursor()
     aid = get_current_account_id()
     try:
-        c.execute('''
+        c.execute(f'''
             UPDATE purchase_orders 
-            SET status = 'RECEIVED', received_date = date('now'), quality_rating = ?
-            WHERE id = ? AND account_id = ?
+            SET status = 'RECEIVED', received_date = CURRENT_DATE, quality_rating = {PLACEHOLDER}
+            WHERE id = {PLACEHOLDER} AND account_id = {PLACEHOLDER}
         ''', (quality_rating, po_id, aid))
         conn.commit()
         return True, "PO Received."
@@ -687,7 +733,7 @@ def get_vendor_scorecard(supplier_id):
     conn = get_connection()
     aid = get_current_account_id()
     # Scoped to Account
-    query = "SELECT * FROM purchase_orders WHERE supplier_id = ? AND account_id = ? AND status = 'RECEIVED'"
+    query = f"SELECT * FROM purchase_orders WHERE supplier_id = {PLACEHOLDER} AND account_id = {PLACEHOLDER} AND status = 'RECEIVED'"
     df = pd.read_sql_query(query, conn, params=(supplier_id, aid))
     conn.close()
     
@@ -717,8 +763,14 @@ def set_daily_context(date_str, weather, event, notes=""):
     c = conn.cursor()
     aid = get_current_account_id()
     try:
-        c.execute("INSERT OR REPLACE INTO daily_context (account_id, date, weather_tag, event_tag, notes) VALUES (?, ?, ?, ?, ?)",
-                  (aid, date_str, weather, event, notes))
+        # Postgres ON CONFLICT, SQLite INSERT OR IGNORE
+        if config.DB_TYPE == "POSTGRES":
+            c.execute(f"INSERT INTO daily_context (account_id, date, weather_tag, event_tag, notes) VALUES ({PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER}) ON CONFLICT (account_id, date) DO UPDATE SET weather_tag = EXCLUDED.weather_tag, event_tag = EXCLUDED.event_tag, notes = EXCLUDED.notes",
+                      (aid, date_str, weather, event, notes))
+        else:
+            # SQLite's INSERT OR REPLACE handles upsert
+            c.execute(f"INSERT OR REPLACE INTO daily_context (account_id, date, weather_tag, event_tag, notes) VALUES ({PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER})",
+                      (aid, date_str, weather, event, notes))
         conn.commit()
         return True, "Context Saved."
     except Exception as e:
@@ -729,12 +781,10 @@ def set_daily_context(date_str, weather, event, notes=""):
 
 def get_daily_context(date_str):
     conn = get_connection()
-    c = conn.cursor()
     aid = get_current_account_id()
-    c.execute("SELECT * FROM daily_context WHERE date = ? AND account_id = ?", (date_str, aid))
-    res = c.fetchone()
+    df = pd.read_sql_query(f"SELECT * FROM daily_context WHERE date = {PLACEHOLDER} AND account_id = {PLACEHOLDER}", conn, params=(date_str, aid))
     conn.close()
-    return res
+    return df.iloc[0].to_dict() if not df.empty else None
 
 def analyze_context_demand(weather_filter=None, event_filter=None):
     """
@@ -821,7 +871,7 @@ def get_tables():
     aid = get_current_account_id()
     # Ensure tables exist for this account (Multi-tenant seeding logic omitted for brevity, assuming shared or pre-seeded)
     # For now, just fetch checks
-    df = pd.read_sql_query("SELECT * FROM restaurant_tables WHERE account_id = ?", conn, params=(aid,))
+    df = pd.read_sql_query(f"SELECT * FROM restaurant_tables WHERE account_id = {PLACEHOLDER}", conn, params=(aid,))
     conn.close()
     return df
 
@@ -915,7 +965,7 @@ def free_table(table_id):
     """Clears table without saving transaction (Cancel)"""
     conn = get_connection()
     c = conn.cursor()
-    c.execute("UPDATE restaurant_tables SET status = 'Available', current_order_id = NULL WHERE id = ?", (table_id,))
+    c.execute(f"UPDATE restaurant_tables SET status = 'Available', current_order_id = NULL WHERE id = {PLACEHOLDER}", (table_id,))
     conn.commit()
     conn.close()
 
@@ -925,7 +975,7 @@ def add_restaurant_table(label, capacity):
     aid = get_current_account_id()
     new_id = generate_unique_id(16)
     try:
-        c.execute("INSERT INTO restaurant_tables (id, account_id, label, capacity, status) VALUES (?, ?, ?, ?, 'Available')", (new_id, aid, label, capacity))
+        c.execute(f"INSERT INTO restaurant_tables (id, account_id, label, capacity, status) VALUES ({PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER}, 'Available')", (new_id, aid, label, capacity))
         conn.commit()
         return True, "Table Added"
     except Exception as e:
@@ -938,12 +988,12 @@ def delete_restaurant_table(table_id):
     c = conn.cursor()
     try:
         # Check if occupied
-        c.execute("SELECT status FROM restaurant_tables WHERE id = ?", (table_id,))
+        c.execute(f"SELECT status FROM restaurant_tables WHERE id = {PLACEHOLDER}", (table_id,))
         res = c.fetchone()
         if res and res[0] != 'Available':
             return False, "Cannot delete occupied table"
             
-        c.execute("DELETE FROM restaurant_tables WHERE id = ?", (table_id,))
+        c.execute(f"DELETE FROM restaurant_tables WHERE id = {PLACEHOLDER}", (table_id,))
         conn.commit()
         return True, "Table Deleted"
     except Exception as e:
@@ -955,7 +1005,7 @@ def update_table_status(table_id, status):
     conn = get_connection()
     c = conn.cursor()
     try:
-        c.execute("UPDATE restaurant_tables SET status = ? WHERE id = ?", (status, table_id))
+        c.execute(f"UPDATE restaurant_tables SET status = {PLACEHOLDER} WHERE id = {PLACEHOLDER}", (status, table_id))
         conn.commit()
         return True
     finally:
@@ -976,7 +1026,7 @@ def merge_tables(parent_id, child_ids):
     c = conn.cursor()
     try:
         for child in child_ids:
-            c.execute("UPDATE restaurant_tables SET merged_with = ? WHERE id = ?", (parent_id, child))
+            c.execute(f"UPDATE restaurant_tables SET merged_with = {PLACEHOLDER} WHERE id = {PLACEHOLDER}", (parent_id, child))
         conn.commit()
         return True
     finally:
@@ -987,9 +1037,9 @@ def unmerge_table(table_id):
     c = conn.cursor()
     try:
         # If this is a child, unmerge it
-        c.execute("UPDATE restaurant_tables SET merged_with = NULL WHERE id = ?", (table_id,))
+        c.execute(f"UPDATE restaurant_tables SET merged_with = NULL WHERE id = {PLACEHOLDER}", (table_id,))
         # If this is a parent, unmerge all children
-        c.execute("UPDATE restaurant_tables SET merged_with = NULL WHERE merged_with = ?", (table_id,))
+        c.execute(f"UPDATE restaurant_tables SET merged_with = NULL WHERE merged_with = {PLACEHOLDER}", (table_id,))
         conn.commit()
         return True
     finally:
@@ -999,7 +1049,7 @@ def update_table_position(table_id, x, y):
     conn = get_connection()
     c = conn.cursor()
     try:
-        c.execute("UPDATE restaurant_tables SET pos_x = ?, pos_y = ? WHERE id = ?", (x, y, table_id))
+        c.execute(f"UPDATE restaurant_tables SET pos_x = {PLACEHOLDER}, pos_y = {PLACEHOLDER} WHERE id = {PLACEHOLDER}", (x, y, table_id))
         conn.commit()
         return True
     finally:
@@ -1012,12 +1062,12 @@ def get_enriched_tables():
     aid = get_current_account_id()
     
     # Left Join to get active order details
-    query = """
+    query = f"""
         SELECT t.id, t.label, t.capacity, t.status, t.current_order_id, t.waiter_id, t.pos_x, t.pos_y, t.merged_with,
                o.start_time, o.items_json
         FROM restaurant_tables t
         LEFT JOIN table_orders o ON t.current_order_id = o.id
-        WHERE t.account_id = ?
+        WHERE t.account_id = {PLACEHOLDER}
     """
     df = pd.read_sql_query(query, conn, params=(aid,))
     conn.close()
@@ -1053,7 +1103,7 @@ def update_restaurant_table_capacity(table_id, new_capacity):
     conn = get_connection()
     c = conn.cursor()
     try:
-        c.execute("UPDATE restaurant_tables SET capacity = ? WHERE id = ?", (new_capacity, table_id))
+        c.execute(f"UPDATE restaurant_tables SET capacity = {PLACEHOLDER} WHERE id = {PLACEHOLDER}", (new_capacity, table_id))
         conn.commit()
         return True, "Updated"
     except Exception as e:
@@ -1071,7 +1121,7 @@ def mark_items_kot_printed(table_id):
             SELECT o.id, o.items_json 
             FROM restaurant_tables t
             JOIN table_orders o ON t.current_order_id = o.id
-            WHERE t.id = ?
+            WHERE t.id = {PLACEHOLDER}
         """
         c.execute(query, (table_id,))
         res = c.fetchone()
@@ -1092,7 +1142,7 @@ def mark_items_kot_printed(table_id):
                 
         if modified:
             new_json = json.dumps(items)
-            c.execute("UPDATE table_orders SET items_json = ? WHERE id = ?", (new_json, order_id))
+            c.execute(f"UPDATE table_orders SET items_json = {PLACEHOLDER} WHERE id = {PLACEHOLDER}", (new_json, order_id))
             conn.commit()
             return True, "KOT Sent", order_id
         return False, "No new items", order_id
@@ -1116,7 +1166,7 @@ def cancel_table_item(table_id, item_idx):
         items[item_idx]['cancelled_at'] = datetime.utcnow().isoformat()
         
         import json
-        c.execute("UPDATE table_orders SET items_json = ? WHERE id = ?", (json.dumps(items), order_id))
+        c.execute(f"UPDATE table_orders SET items_json = {PLACEHOLDER} WHERE id = {PLACEHOLDER}", (json.dumps(items), order_id))
         conn.commit()
         return True
     except Exception as e:
@@ -1205,8 +1255,8 @@ def map_online_item(platform, ext_name, int_prod_id):
     try:
         mapping_id = generate_unique_id(16)
         # Check if exists (upsert)
-        c.execute("DELETE FROM online_menu_mapping WHERE platform = ? AND external_item_name = ? AND account_id = ?", (platform, ext_name, aid))
-        c.execute("INSERT INTO online_menu_mapping (id, account_id, platform, external_item_name, internal_product_id) VALUES (?, ?, ?, ?, ?)",
+        c.execute(f"DELETE FROM online_menu_mapping WHERE platform = {PLACEHOLDER} AND external_item_name = {PLACEHOLDER} AND account_id = {PLACEHOLDER}", (platform, ext_name, aid))
+        c.execute(f"INSERT INTO online_menu_mapping (id, account_id, platform, external_item_name, internal_product_id) VALUES ({PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER})",
                   (mapping_id, aid, platform, ext_name, int_prod_id))
         conn.commit()
         return True
@@ -1219,10 +1269,10 @@ def map_online_item(platform, ext_name, int_prod_id):
 def get_online_mappings(platform=None):
     conn = get_connection()
     aid = get_current_account_id()
-    query = "SELECT m.*, p.name as internal_name FROM online_menu_mapping m JOIN products p ON m.internal_product_id = p.id WHERE m.account_id = ?"
+    query = f"SELECT m.*, p.name as internal_name FROM online_menu_mapping m JOIN products p ON m.internal_product_id = p.id WHERE m.account_id = {PLACEHOLDER}"
     params = [aid]
     if platform:
-        query += " AND m.platform = ?"
+        query += f" AND m.platform = {PLACEHOLDER}"
         params.append(platform)
     df = pd.read_sql_query(query, conn, params=params)
     conn.close()
@@ -1239,7 +1289,7 @@ def sync_online_order(platform, ext_order_id, items_list):
     try:
         import json
         order_id = generate_unique_id(16)
-        c.execute("INSERT INTO online_orders_sync (id, account_id, platform, external_order_id, items_json) VALUES (?, ?, ?, ?, ?)",
+        c.execute(f"INSERT INTO online_orders_sync (id, account_id, platform, external_order_id, items_json) VALUES ({PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER})",
                   (order_id, aid, platform, ext_order_id, json.dumps(items_list)))
         conn.commit()
         return order_id
@@ -1253,14 +1303,14 @@ def get_pending_online_orders():
     conn = get_connection()
     aid = get_current_account_id()
     try:
-        df = pd.read_sql_query("SELECT * FROM online_orders_sync WHERE account_id = ? AND status = 'PENDING' ORDER BY created_at DESC", conn, params=(aid,))
+        df = pd.read_sql_query(f"SELECT * FROM online_orders_sync WHERE account_id = {PLACEHOLDER} AND status = 'PENDING' ORDER BY created_at DESC", conn, params=(aid,))
         conn.close()
         return df
     except:
         # Table might be missing if just added
         create_online_integration_tables(conn)
         conn = get_connection() # Re-open
-        df = pd.read_sql_query("SELECT * FROM online_orders_sync WHERE account_id = ? AND status = 'PENDING' ORDER BY created_at DESC", conn, params=(aid,))
+        df = pd.read_sql_query(f"SELECT * FROM online_orders_sync WHERE account_id = {PLACEHOLDER} AND status = 'PENDING' ORDER BY created_at DESC", conn, params=(aid,))
         conn.close()
         return df
 
@@ -1268,14 +1318,14 @@ def get_accepted_online_orders():
     conn = get_connection()
     aid = get_current_account_id()
     try:
-        df = pd.read_sql_query("SELECT * FROM online_orders_sync WHERE account_id = ? AND status = 'ACCEPTED' ORDER BY created_at DESC", conn, params=(aid,))
+        df = pd.read_sql_query(f"SELECT * FROM online_orders_sync WHERE account_id = {PLACEHOLDER} AND status = 'ACCEPTED' ORDER BY created_at DESC", conn, params=(aid,))
         conn.close()
         return df
     except:
         # Table might be missing
         create_online_integration_tables(conn)
         conn = get_connection() # Re-open
-        df = pd.read_sql_query("SELECT * FROM online_orders_sync WHERE account_id = ? AND status = 'ACCEPTED' ORDER BY created_at DESC", conn, params=(aid,))
+        df = pd.read_sql_query(f"SELECT * FROM online_orders_sync WHERE account_id = {PLACEHOLDER} AND status = 'ACCEPTED' ORDER BY created_at DESC", conn, params=(aid,))
         conn.close()
         return df
 
@@ -1283,7 +1333,7 @@ def update_online_order_status(sync_id, new_status):
     conn = get_connection()
     c = conn.cursor()
     try:
-        c.execute("UPDATE online_orders_sync SET status = ? WHERE id = ?", (new_status, sync_id))
+        c.execute(f"UPDATE online_orders_sync SET status = {PLACEHOLDER} WHERE id = {PLACEHOLDER}", (new_status, sync_id))
         conn.commit()
         return True
     except Exception as e:
@@ -1296,7 +1346,7 @@ def update_online_item_kds_status(sync_id, item_idx, new_status):
     conn = get_connection()
     c = conn.cursor()
     try:
-        c.execute("SELECT items_json FROM online_orders_sync WHERE id = ?", (sync_id,))
+        c.execute(f"SELECT items_json FROM online_orders_sync WHERE id = {PLACEHOLDER}", (sync_id,))
         res = c.fetchone()
         if not res: return False
         
@@ -1304,7 +1354,7 @@ def update_online_item_kds_status(sync_id, item_idx, new_status):
         items = json.loads(res[0])
         if 0 <= item_idx < len(items):
             items[item_idx]['status'] = new_status
-            c.execute("UPDATE online_orders_sync SET items_json = ? WHERE id = ?", (json.dumps(items), sync_id))
+            c.execute(f"UPDATE online_orders_sync SET items_json = {PLACEHOLDER} WHERE id = {PLACEHOLDER}", (json.dumps(items), sync_id))
             conn.commit()
             return True
         return False
@@ -1320,14 +1370,14 @@ def update_online_item_kds_status(sync_id, item_idx, new_status):
         return pd.DataFrame() # No history
         
     dates = matching_dates_df['date'].tolist()
-    placeholders = ','.join(['?']*len(dates))
+    placeholders = ','.join([PLACEHOLDER]*len(dates))
     
     # 2. Aggregates sales on those dates (Scoped)
     sales_query = f'''
         SELECT ti.product_name, SUM(ti.quantity) as total_qty, AVG(ti.price_at_sale) as avg_price
         FROM transaction_items ti
         JOIN transactions t ON ti.transaction_id = t.id
-        WHERE t.account_id = ? AND date(t.timestamp) IN ({placeholders})
+        WHERE t.account_id = {PLACEHOLDER} AND date(t.timestamp) IN ({placeholders})
         GROUP BY ti.product_name
         ORDER BY total_qty DESC
         LIMIT 10
@@ -1346,7 +1396,7 @@ def create_b2b_deal(store, product, qty, price, phone):
     aid = get_current_account_id()
     new_id = generate_unique_id(16)
     try:
-        c.execute("INSERT INTO b2b_deals (id, account_id, store_name, product_name, quantity, price_per_unit, acc_phone) VALUES (?, ?, ?, ?, ?, ?, ?)", 
+        c.execute(f"INSERT INTO b2b_deals (id, account_id, store_name, product_name, quantity, price_per_unit, acc_phone) VALUES ({PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER})", 
                   (new_id, aid, store, product, qty, price, phone))
         conn.commit()
         return True, "Deal Broadcasted!"
@@ -1361,7 +1411,7 @@ def create_campaign(item, desc, votes, price):
     aid = get_current_account_id()
     new_id = generate_unique_id(16)
     try:
-        c.execute("INSERT INTO crowd_campaigns (id, account_id, item_name, description, votes_needed, price_est) VALUES (?, ?, ?, ?, ?, ?)", 
+        c.execute(f"INSERT INTO crowd_campaigns (id, account_id, item_name, description, votes_needed, price_est) VALUES ({PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER})", 
                   (new_id, aid, item, desc, votes, price))
         conn.commit()
         return True, "Campaign Started!"
@@ -1374,7 +1424,7 @@ def add_staff(name, role, rate):
     c = conn.cursor()
     aid = get_current_account_id()
     try:
-        c.execute("INSERT INTO staff (account_id, name, role, hourly_rate) VALUES (?, ?, ?, ?)", (aid, name, role, rate))
+        c.execute(f"INSERT INTO staff (account_id, name, role, hourly_rate) VALUES ({PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER})", (aid, name, role, rate))
         conn.commit()
         return True, "Staff added."
     except Exception as e:
@@ -1385,7 +1435,7 @@ def add_staff(name, role, rate):
 def get_all_staff(override_account_id=None):
     conn = get_connection()
     aid = override_account_id if override_account_id is not None else get_current_account_id()
-    df = pd.read_sql_query("SELECT * FROM staff WHERE account_id = ?", conn, params=(aid,))
+    df = pd.read_sql_query(f"SELECT * FROM staff WHERE account_id = {PLACEHOLDER}", conn, params=(aid,))
     conn.close()
     return df
 
@@ -1395,16 +1445,16 @@ def assign_shift(date_str, slot, staff_id):
     aid = get_current_account_id()
     try:
         # Check Staff Ownership
-        c.execute("SELECT id FROM staff WHERE id = ? AND account_id = ?", (staff_id, aid))
+        c.execute(f"SELECT id FROM staff WHERE id = {PLACEHOLDER} AND account_id = {PLACEHOLDER}", (staff_id, aid))
         if not c.fetchone():
             return False, "Unauthorized shift assignment."
 
         # Check if already assigned
-        c.execute("SELECT id FROM shifts WHERE date = ? AND slot = ? AND staff_id = ?", (date_str, slot, staff_id))
+        c.execute(f"SELECT id FROM shifts WHERE date = {PLACEHOLDER} AND slot = {PLACEHOLDER} AND staff_id = {PLACEHOLDER}", (date_str, slot, staff_id))
         if c.fetchone():
             return True, "Already assigned."
             
-        c.execute("INSERT INTO shifts (date, slot, staff_id) VALUES (?, ?, ?)", (date_str, slot, staff_id))
+        c.execute(f"INSERT INTO shifts (date, slot, staff_id) VALUES ({PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER})", (date_str, slot, staff_id))
         conn.commit()
         return True, "Shift assigned."
     except Exception as e:
@@ -1416,11 +1466,11 @@ def get_shifts(date_str):
     conn = get_connection()
     aid = get_current_account_id()
     # Join with Staff to filter by Account via Staff
-    query = '''
+    query = f'''
         SELECT sh.*, s.name, s.role 
         FROM shifts sh
         JOIN staff s ON sh.staff_id = s.id
-        WHERE sh.date = ? AND s.account_id = ?
+        WHERE sh.date = {PLACEHOLDER} AND s.account_id = {PLACEHOLDER}
     '''
     df = pd.read_sql_query(query, conn, params=(date_str, aid))
     conn.close()
@@ -1464,7 +1514,7 @@ def record_transaction(items, total_amount, total_profit, customer_id=None, poin
     
     try:
         # 1. Create Transaction Record (With Account ID)
-        c.execute('INSERT INTO transactions (id, account_id, total_amount, total_profit, timestamp, customer_id, transaction_hash, points_redeemed, payment_method) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)', 
+        c.execute(f'INSERT INTO transactions (id, account_id, total_amount, total_profit, timestamp, customer_id, transaction_hash, points_redeemed, payment_method) VALUES ({PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER})', 
                   (new_txn_id, aid, total_amount, total_profit, datetime.now(), customer_id, txn_hash, points_redeemed, payment_method))
         
         transaction_id = new_txn_id # Use our generated ID
@@ -1477,15 +1527,15 @@ def record_transaction(items, total_amount, total_profit, customer_id=None, poin
              item_id = generate_unique_id(16)
              txn_items_data.append((item_id, transaction_id, item['id'], item['name'], item['qty'], item['price'], item['cost']))
         
-        c.executemany('''
+        c.executemany(f'''
             INSERT INTO transaction_items (id, transaction_id, product_id, product_name, quantity, price_at_sale, cost_at_sale)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            VALUES ({PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER})
         ''', txn_items_data)
         
         # 3. Deduct Stock (Batch Optimization - Scoped)
         # Prepare data for batch update: (qty_to_deduct, product_id, account_id)
         stock_updates = [(item['qty'], item['id'], aid) for item in items]
-        c.executemany('UPDATE products SET stock_quantity = stock_quantity - ? WHERE id = ? AND account_id = ?', stock_updates)
+        c.executemany(f'UPDATE products SET stock_quantity = stock_quantity - {PLACEHOLDER} WHERE id = {PLACEHOLDER} AND account_id = {PLACEHOLDER}', stock_updates)
 
        # 4. FEFO Batch Deduction (FreshFlow Logic - Scoped)
         for item in items:
@@ -1493,7 +1543,7 @@ def record_transaction(items, total_amount, total_profit, customer_id=None, poin
             p_id = item['id']
             
             # Fetch batches for this product ordered by expiry (Scoped to Account)
-            c.execute("SELECT id, quantity FROM product_batches WHERE product_id = ? AND account_id = ? AND quantity > 0 ORDER BY expiry_date ASC", (p_id, aid))
+            c.execute(f"SELECT id, quantity FROM product_batches WHERE product_id = {PLACEHOLDER} AND account_id = {PLACEHOLDER} AND quantity > 0 ORDER BY expiry_date ASC", (p_id, aid))
             batches = c.fetchall()
             
             for b_id, b_qty in batches:
@@ -1501,7 +1551,7 @@ def record_transaction(items, total_amount, total_profit, customer_id=None, poin
                     break
                 
                 deduct = min(qty_needed, b_qty)
-                c.execute("UPDATE product_batches SET quantity = quantity - ? WHERE id = ? AND account_id = ?", (deduct, b_id, aid))
+                c.execute(f"UPDATE product_batches SET quantity = quantity - {PLACEHOLDER} WHERE id = {PLACEHOLDER} AND account_id = {PLACEHOLDER}", (deduct, b_id, aid))
                 qty_needed -= deduct
         
         # 5. Update Loyalty Points
@@ -1512,7 +1562,7 @@ def record_transaction(items, total_amount, total_profit, customer_id=None, poin
             # Net Change = Earned - Redeemed
             net_points_change = points_earned - points_redeemed
             
-            c.execute('UPDATE customers SET loyalty_points = loyalty_points + ? WHERE id = ? AND account_id = ?', (net_points_change, customer_id, aid))
+            c.execute(f'UPDATE customers SET loyalty_points = loyalty_points + {PLACEHOLDER} WHERE id = {PLACEHOLDER} AND account_id = {PLACEHOLDER}', (net_points_change, customer_id, aid))
             
         conn.commit()
         return txn_hash 
@@ -1537,7 +1587,7 @@ def create_company_account(company_name, username, password, email):
     new_acc_id = generate_unique_id(16)
     try:
         # Check if COMPANY NAME exists globally
-        c.execute("SELECT id, status FROM accounts WHERE company_name = ?", (company_name,))
+        c.execute(f"SELECT id, status FROM accounts WHERE company_name = {PLACEHOLDER}", (company_name,))
         result = c.fetchone()
         if result:
             acc_id, status = result[0], result[1]
@@ -1546,14 +1596,14 @@ def create_company_account(company_name, username, password, email):
             return False, "Company Name already exists. Please login."
 
         # 1. Create Account
-        c.execute("INSERT INTO accounts (id, company_name, subscription_plan, status) VALUES (?, ?, 'Starter', 'PENDING')", (new_acc_id, company_name))
+        c.execute(f"INSERT INTO accounts (id, company_name, subscription_plan, status) VALUES ({PLACEHOLDER}, {PLACEHOLDER}, 'Starter', 'PENDING')", (new_acc_id, company_name))
         account_id = new_acc_id
         
         # 2. Create User (Admin)
         pwd_hash = hashlib.sha256(password.encode()).hexdigest()
         new_user_id = generate_unique_id(16)
         
-        c.execute("INSERT INTO users (id, account_id, username, email, password_hash, role) VALUES (?, ?, ?, ?, ?, ?)", 
+        c.execute(f"INSERT INTO users (id, account_id, username, email, password_hash, role) VALUES ({PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER})", 
                   (new_user_id, account_id, username, email, pwd_hash, 'admin'))
         
         conn.commit()
@@ -1578,7 +1628,7 @@ def create_user(username, password, email, role='staff', override_account_id=Non
     new_id = generate_unique_id(16)
     try:
         pwd_hash = hashlib.sha256(password.encode()).hexdigest()
-        c.execute("INSERT INTO users (id, account_id, username, email, password_hash, role) VALUES (?, ?, ?, ?, ?, ?)", 
+        c.execute(f"INSERT INTO users (id, account_id, username, email, password_hash, role) VALUES ({PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER})", 
                   (new_id, aid, username, email, pwd_hash, role))
         conn.commit()
         return True, "User created successfully."
@@ -1604,11 +1654,11 @@ def verify_user(username, password, company_name_check):
         
         # Strict Login: Match Username + Password + Company Name AND Check Status
         # Added permissions to SELECT
-        query = """
+        query = f"""
             SELECT u.role, u.account_id, a.company_name, a.status, u.permissions
             FROM users u 
             JOIN accounts a ON u.account_id = a.id
-            WHERE u.username = ? AND u.password_hash = ? AND a.company_name = ?
+            WHERE u.username = {PLACEHOLDER} AND u.password_hash = {PLACEHOLDER} AND a.company_name = {PLACEHOLDER}
         """
         c.execute(query, (username, pwd_hash, company_name_check))
         result = c.fetchone()
@@ -1639,7 +1689,7 @@ def initiate_password_reset(contact):
     c = conn.cursor()
     try:
         # Search in users (username or email matching contact)
-        c.execute("SELECT id, email FROM users WHERE username = ? OR email = ?", (contact, contact))
+        c.execute(f"SELECT id, email FROM users WHERE username = {PLACEHOLDER} OR email = {PLACEHOLDER}", (contact, contact))
         user = c.fetchone()
         
         if user:
@@ -1662,7 +1712,7 @@ def get_all_account_users():
     conn = get_connection()
     aid = get_current_account_id()
     try:
-        df = pd.read_sql_query("SELECT username, email, role, created_at, permissions FROM users WHERE account_id = ? ORDER BY created_at DESC", conn, params=(aid,))
+        df = pd.read_sql_query(f"SELECT username, email, role, created_at, permissions FROM users WHERE account_id = {PLACEHOLDER} ORDER BY created_at DESC", conn, params=(aid,))
         return df
     except:
         return pd.DataFrame()
@@ -1680,7 +1730,7 @@ def delete_user(username):
         if username == current_user:
              return False, "Cannot delete your own account."
 
-        c.execute("DELETE FROM users WHERE username = ? AND account_id = ?", (username, aid))
+        c.execute(f"DELETE FROM users WHERE username = {PLACEHOLDER} AND account_id = {PLACEHOLDER}", (username, aid))
         if c.rowcount > 0:
             conn.commit()
             return True, "User deleted."
@@ -1697,7 +1747,7 @@ def admin_reset_password(username, new_password):
     aid = get_current_account_id()
     try:
         pwd_hash = hashlib.sha256(new_password.encode()).hexdigest()
-        c.execute("UPDATE users SET password_hash = ? WHERE username = ? AND account_id = ?", (pwd_hash, username, aid))
+        c.execute(f"UPDATE users SET password_hash = {PLACEHOLDER} WHERE username = {PLACEHOLDER} AND account_id = {PLACEHOLDER}", (pwd_hash, username, aid))
         if c.rowcount > 0:
             conn.commit()
             return True, "Password reset successfully."
@@ -1715,7 +1765,7 @@ def update_user_permissions(username, permissions_list):
     try:
         perm_str = ",".join(permissions_list) if permissions_list else None
         
-        c.execute("UPDATE users SET permissions = ? WHERE username = ? AND account_id = ?", (perm_str, username, aid))
+        c.execute(f"UPDATE users SET permissions = {PLACEHOLDER} WHERE username = {PLACEHOLDER} AND account_id = {PLACEHOLDER}", (perm_str, username, aid))
         if c.rowcount > 0:
             conn.commit()
             return True, "Permissions updated."
@@ -1732,7 +1782,8 @@ def create_purchase_order(supplier_id, expected_date, notes="", override_account
     aid = override_account_id if override_account_id is not None else get_current_account_id()
     new_id = generate_unique_id(16)
     try:
-        c.execute("INSERT INTO purchase_orders (id, account_id, supplier_id, order_date, expected_date, notes) VALUES (?, ?, ?, date('now'), ?, ?)",
+        now_sql = "CURRENT_DATE" if config.DB_TYPE == "POSTGRES" else "date('now')"
+        c.execute(f"INSERT INTO purchase_orders (id, account_id, supplier_id, order_date, expected_date, notes) VALUES ({PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER}, {now_sql}, {PLACEHOLDER}, {PLACEHOLDER})",
                   (new_id, aid, supplier_id, expected_date, notes))
         conn.commit()
         return True, "PO Created."
@@ -1747,7 +1798,7 @@ def add_staff(name, role, rate, override_account_id=None):
     aid = override_account_id if override_account_id is not None else get_current_account_id()
     new_id = generate_unique_id(16)
     try:
-        c.execute("INSERT INTO staff (id, account_id, name, role, hourly_rate) VALUES (?, ?, ?, ?, ?)", (new_id, aid, name, role, rate))
+        c.execute(f"INSERT INTO staff (id, account_id, name, role, hourly_rate) VALUES ({PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER})", (new_id, aid, name, role, rate))
         conn.commit()
         return True, "Staff added."
     except Exception as e:
@@ -1762,16 +1813,16 @@ def assign_shift(date_str, slot, staff_id, override_account_id=None):
     new_id = generate_unique_id(16)
     try:
         # Verify staff belongs to account
-        c.execute("SELECT id FROM staff WHERE id = ? AND account_id = ?", (staff_id, aid))
+        c.execute(f"SELECT id FROM staff WHERE id = {PLACEHOLDER} AND account_id = {PLACEHOLDER}", (staff_id, aid))
         if not c.fetchone():
             return False, "Staff member not found or unauthorized."
 
         # Check if already assigned
-        c.execute("SELECT id FROM shifts WHERE date = ? AND slot = ? AND staff_id = ?", (date_str, slot, staff_id))
+        c.execute(f"SELECT id FROM shifts WHERE date = {PLACEHOLDER} AND slot = {PLACEHOLDER} AND staff_id = {PLACEHOLDER}", (date_str, slot, staff_id))
         if c.fetchone():
             return True, "Already assigned."
             
-        c.execute("INSERT INTO shifts (id, date, slot, staff_id) VALUES (?, ?, ?, ?)", (new_id, date_str, slot, staff_id))
+        c.execute(f"INSERT INTO shifts (id, date, slot, staff_id) VALUES ({PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER})", (new_id, date_str, slot, staff_id))
         conn.commit()
         return True, "Shift assigned."
     except Exception as e:
@@ -1783,11 +1834,11 @@ def get_shifts(date_str):
     conn = get_connection()
     aid = get_current_account_id()
     # Join with Staff to filter by Account via Staff
-    query = '''
+    query = f'''
         SELECT sh.*, s.name, s.role 
         FROM shifts sh
         JOIN staff s ON sh.staff_id = s.id
-        WHERE sh.date = ? AND s.account_id = ?
+        WHERE sh.date = {PLACEHOLDER} AND s.account_id = {PLACEHOLDER}
     '''
     df = pd.read_sql_query(query, conn, params=(date_str, aid))
     conn.close()
@@ -1827,12 +1878,12 @@ def create_tenant(company_name, plan="Starter"):
     c = conn.cursor()
     new_id = generate_unique_id(16, numeric_only=True)
     try:
-        c.execute("INSERT INTO accounts (id, company_name, subscription_plan, status) VALUES (?, ?, ?, 'ACTIVE')", 
+        c.execute(f"INSERT INTO accounts (id, company_name, subscription_plan, status) VALUES ({PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER}, 'ACTIVE')", 
                   (new_id, company_name, plan))
         
         # Initialize Default Settings for this Account
-        c.execute("INSERT INTO settings (account_id, key, value) VALUES (?, 'store_name', ?)", (new_id, company_name))
-        c.execute("INSERT INTO settings (account_id, key, value) VALUES (?, 'subscription_plan', ?)", (new_id, plan))
+        c.execute(f"INSERT INTO settings (account_id, key, value) VALUES ({PLACEHOLDER}, 'store_name', {PLACEHOLDER})", (new_id, company_name))
+        c.execute(f"INSERT INTO settings (account_id, key, value) VALUES ({PLACEHOLDER}, 'subscription_plan', {PLACEHOLDER})", (new_id, plan))
         
         conn.commit()
         return True, f"Tenant Created. ID: {new_id}"
@@ -1853,12 +1904,12 @@ def update_tenant_status(account_id, status):
         # Also check company name just in case ID varies
         msg = "Status Updated."
         if status == 'SUSPENDED':
-             c.execute("SELECT company_name FROM accounts WHERE id=?", (account_id,))
+             c.execute(f"SELECT company_name FROM accounts WHERE id={PLACEHOLDER}", (account_id,))
              res = c.fetchone()
              if res and (res[0] == 'VyaparMind System' or res[0] == 'admin'):
                  return False, "Cannot suspend Critical System Account."
                  
-        c.execute("UPDATE accounts SET status = ? WHERE id = ?", (status, account_id))
+        c.execute(f"UPDATE accounts SET status = {PLACEHOLDER} WHERE id = {PLACEHOLDER}", (status, account_id))
         conn.commit()
         return True, msg
     except Exception as e:
@@ -1872,9 +1923,12 @@ def update_tenant_plan(account_id, new_plan):
     c = conn.cursor()
     try:
         # Update Account Table
-        c.execute("UPDATE accounts SET subscription_plan = ? WHERE id = ?", (new_plan, account_id))
+        c.execute(f"UPDATE accounts SET subscription_plan = {PLACEHOLDER} WHERE id = {PLACEHOLDER}", (new_plan, account_id))
         # Update Settings Table
-        c.execute("INSERT OR REPLACE INTO settings (account_id, key, value) VALUES (?, 'subscription_plan', ?)", (account_id, new_plan))
+        if config.DB_TYPE == "POSTGRES":
+            c.execute(f"INSERT INTO settings (account_id, key, value) VALUES ({PLACEHOLDER}, 'subscription_plan', {PLACEHOLDER}) ON CONFLICT (account_id, key) DO UPDATE SET value = EXCLUDED.value", (account_id, new_plan))
+        else:
+            c.execute(f"INSERT OR REPLACE INTO settings (account_id, key, value) VALUES ({PLACEHOLDER}, 'subscription_plan', {PLACEHOLDER})", (account_id, new_plan))
         conn.commit()
         return True, "Plan Updated."
     except Exception as e:
@@ -1890,13 +1944,13 @@ def fetch_floor_status():
     conn = get_connection()
     # Left join to get all tables even if empty
     # We also need to calculate elapsed time in python or sql. Python is easier for formatting.
-    q = """
+    q = f"""
         SELECT 
             t.id, t.label, t.capacity, t.status, 
             o.start_time, o.items_json
         FROM restaurant_tables t
         LEFT JOIN table_orders o ON t.current_order_id = o.id
-        WHERE t.account_id = ?
+        WHERE t.account_id = {PLACEHOLDER}
     """
     aid = get_current_account_id()
     
@@ -1938,11 +1992,11 @@ def remove_item_from_table(table_id, item_index):
     c = conn.cursor()
     try:
         # Get Current Items
-        c.execute("""
+        c.execute(f"""
             SELECT o.items_json, o.id 
             FROM restaurant_tables t
             JOIN table_orders o ON t.current_order_id = o.id
-            WHERE t.id = ?
+            WHERE t.id = {PLACEHOLDER}
         """, (table_id,))
         row = c.fetchone()
         
@@ -1958,7 +2012,7 @@ def remove_item_from_table(table_id, item_index):
                     
                     # Update DB
                     new_json = json.dumps(items)
-                    c.execute("UPDATE table_orders SET items_json = ? WHERE id = ?", (new_json, order_id))
+                    c.execute(f"UPDATE table_orders SET items_json = {PLACEHOLDER} WHERE id = {PLACEHOLDER}", (new_json, order_id))
                     conn.commit()
                     return True, f"Removed {popped.get('name', 'Item')}"
                 else:
@@ -1977,11 +2031,11 @@ def mark_items_kot_printed(table_id):
     c = conn.cursor()
     try:
         # Get Current Items
-        c.execute("""
+        c.execute(f"""
             SELECT o.items_json, o.id 
             FROM restaurant_tables t
             JOIN table_orders o ON t.current_order_id = o.id
-            WHERE t.id = ?
+            WHERE t.id = {PLACEHOLDER}
         """, (table_id,))
         row = c.fetchone()
         
@@ -1999,7 +2053,7 @@ def mark_items_kot_printed(table_id):
                 
                 if updated:
                     new_json = json.dumps(items)
-                    c.execute("UPDATE table_orders SET items_json = ? WHERE id = ?", (new_json, order_id))
+                    c.execute(f"UPDATE table_orders SET items_json = {PLACEHOLDER} WHERE id = {PLACEHOLDER}", (new_json, order_id))
                     conn.commit()
                     return True, "KOT Marked Printed", order_id
                 return True, "No new items", order_id
@@ -2018,7 +2072,7 @@ def get_plan_features(plan_name):
         # Check standard hardcoded tiers first (Optional, but DB is source of truth for custom)
         # We'll just check DB.
         c = conn.cursor()
-        c.execute("SELECT features FROM subscription_plans WHERE name = ?", (plan_name,))
+        c.execute(f"SELECT modules FROM subscription_plans WHERE name = {PLACEHOLDER}", (plan_name,))
         row = c.fetchone()
         if row and row[0]:
             return [f.strip() for f in row[0].split(',') if f.strip()]
@@ -2061,12 +2115,12 @@ def get_all_plans():
     finally:
         conn.close()
 
-def add_plan(name, price, features=""):
+def add_plan(name, price, modules=""):
     """Adds a new subscription plan."""
     conn = get_connection()
     c = conn.cursor()
     try:
-        c.execute("INSERT INTO subscription_plans (name, price, features) VALUES (?, ?, ?)", (name, price, features))
+        c.execute(f"INSERT INTO subscription_plans (name, price, modules) VALUES ({PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER})", (name, price, modules))
         conn.commit()
         return True, "Plan Added."
     except Exception as e:
@@ -2074,22 +2128,22 @@ def add_plan(name, price, features=""):
     finally:
         conn.close()
 
-def update_plan(old_name, new_name, new_price, new_features):
+def update_plan(old_name, new_name, new_price, new_modules):
     """Updates an existing subscription plan."""
     conn = get_connection()
     c = conn.cursor()
     try:
         # Check if new name exists and is not the old name (collision check)
         if old_name != new_name:
-            c.execute("SELECT id FROM subscription_plans WHERE name = ?", (new_name,))
+            c.execute(f"SELECT id FROM subscription_plans WHERE name = {PLACEHOLDER}", (new_name,))
             if c.fetchone():
                 return False, "Plan name already exists."
 
-        c.execute("""
+        c.execute(f"""
             UPDATE subscription_plans 
-            SET name = ?, price = ?, features = ? 
-            WHERE name = ?
-        """, (new_name, new_price, new_features, old_name))
+            SET name = {PLACEHOLDER}, price = {PLACEHOLDER}, modules = {PLACEHOLDER} 
+            WHERE name = {PLACEHOLDER}
+        """, (new_name, new_price, new_modules, old_name))
         
         conn.commit()
         return True, "Plan Updated."
@@ -2103,7 +2157,7 @@ def delete_plan(plan_name):
     conn = get_connection()
     c = conn.cursor()
     try:
-        c.execute("DELETE FROM subscription_plans WHERE name = ?", (plan_name,))
+        c.execute(f"DELETE FROM subscription_plans WHERE name = {PLACEHOLDER}", (plan_name,))
         conn.commit()
         return True, "Plan Deleted."
     except Exception as e:
@@ -2124,17 +2178,22 @@ def get_churn_metrics(days_threshold=30):
     # Logic: 
     # 1. Get max timestamp per customer (Last Seen)
     # 2. Filter where Last Seen < (Now - Threshold)
-    query = """
+    if config.DB_TYPE == "POSTGRES":
+        days_diff_sql = "EXTRACT(DAY FROM (CURRENT_TIMESTAMP - MAX(t.timestamp)))"
+    else:
+        days_diff_sql = "(julianday('now') - julianday(MAX(t.timestamp)))"
+
+    query = f"""
         SELECT 
             c.id, c.name, c.phone, c.email, 
             MAX(t.timestamp) as last_seen, 
             SUM(t.total_amount) as total_spent,
-            (julianday('now') - julianday(MAX(t.timestamp))) as days_since
+            {days_diff_sql} as days_since
         FROM transactions t
         JOIN customers c ON t.customer_id = c.id
-        WHERE t.account_id = ?
+        WHERE t.account_id = {PLACEHOLDER}
         GROUP BY c.id
-        HAVING days_since > ?
+        HAVING {days_diff_sql} > {PLACEHOLDER}
         ORDER BY total_spent DESC
     """
     
@@ -2156,11 +2215,11 @@ def get_geo_revenue():
     conn = get_connection()
     aid = get_current_account_id()
     
-    query = """
+    query = f"""
         SELECT c.city, SUM(t.total_amount) as revenue
         FROM transactions t
         JOIN customers c ON t.customer_id = c.id
-        WHERE t.account_id = ? AND c.city IS NOT NULL
+        WHERE t.account_id = {PLACEHOLDER} AND c.city IS NOT NULL
         GROUP BY c.city
         ORDER BY revenue DESC
     """
@@ -2184,9 +2243,9 @@ def get_b2b_deals():
     aid = get_current_account_id()
     
     # Logic: Show me deals from OTHER stores
-    query = """
+    query = f"""
         SELECT * FROM b2b_deals 
-        WHERE account_id != ? 
+        WHERE account_id != {PLACEHOLDER} 
         ORDER BY created_at DESC
     """
     try:
@@ -2206,9 +2265,9 @@ def create_b2b_deal(store_name, product_name, quantity, price_per_unit, phone):
     
     try:
         c = conn.cursor()
-        c.execute("""
+        c.execute(f"""
             INSERT INTO b2b_deals (id, account_id, store_name, product_name, quantity, price_per_unit, acc_phone)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            VALUES ({PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER})
         """, (new_id, aid, store_name, product_name, quantity, price_per_unit, phone))
         conn.commit()
         return True, "Deal Broadcasted."
@@ -2224,7 +2283,7 @@ def get_campaigns():
     conn = get_connection()
     aid = get_current_account_id()
     try:
-        df = pd.read_sql_query("SELECT * FROM crowd_campaigns WHERE account_id = ? ORDER BY created_at DESC", conn, params=(aid,))
+        df = pd.read_sql_query(f"SELECT * FROM crowd_campaigns WHERE account_id = {PLACEHOLDER} ORDER BY created_at DESC", conn, params=(aid,))
         return df
     except Exception as e:
         return pd.DataFrame()
@@ -2239,9 +2298,9 @@ def create_campaign(item_name, description, votes_needed, price_est):
     new_id = generate_unique_id(16)
     
     try:
-        c.execute("""
+        c.execute(f"""
             INSERT INTO crowd_campaigns (id, account_id, item_name, description, votes_needed, price_est)
-            VALUES (?, ?, ?, ?, ?, ?)
+            VALUES ({PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER})
         """, (new_id, aid, item_name, description, votes_needed, price_est))
         conn.commit()
         return True, "Campaign Launched."
@@ -2256,7 +2315,7 @@ def vote_campaign(campaign_id):
     c = conn.cursor()
     try:
         # Check current status first
-        c.execute("SELECT votes_current, votes_needed, item_name FROM crowd_campaigns WHERE id = ?", (campaign_id,))
+        c.execute(f"SELECT votes_current, votes_needed, item_name FROM crowd_campaigns WHERE id = {PLACEHOLDER}", (campaign_id,))
         row = c.fetchone()
         if not row:
             return False, "Campaign not found."
@@ -2267,9 +2326,9 @@ def vote_campaign(campaign_id):
         msg = "Vote Recorded!"
         if new_votes >= needed:
             msg = f"🎉 '{name}' is FULLY FUNDED! Time to order stock."
-            c.execute("UPDATE crowd_campaigns SET status = 'FUNDED' WHERE id = ?", (campaign_id,))
+            c.execute(f"UPDATE crowd_campaigns SET status = 'FUNDED' WHERE id = {PLACEHOLDER}", (campaign_id,))
             
-        c.execute("UPDATE crowd_campaigns SET votes_current = ? WHERE id = ?", (new_votes, campaign_id))
+        c.execute(f"UPDATE crowd_campaigns SET votes_current = {PLACEHOLDER} WHERE id = {PLACEHOLDER}", (new_votes, campaign_id))
         conn.commit()
         return True, msg
     except Exception as e:
@@ -2293,15 +2352,15 @@ def approve_account(account_id):
     c = conn.cursor()
     try:
         # 1. Update Status
-        c.execute("UPDATE accounts SET status='ACTIVE' WHERE id=?", (account_id,))
+        c.execute(f"UPDATE accounts SET status='ACTIVE' WHERE id={PLACEHOLDER}", (account_id,))
         if c.rowcount == 0:
             return False, "Account not found"
             
         # 2. Get Account & Admin Details for Email
-        c.execute("SELECT company_name, subscription_plan, created_at FROM accounts WHERE id=?", (account_id,))
+        c.execute(f"SELECT company_name, subscription_plan, created_at FROM accounts WHERE id={PLACEHOLDER}", (account_id,))
         acc_row = c.fetchone()
         
-        c.execute("SELECT email, username FROM users WHERE account_id=? AND role='admin' LIMIT 1", (account_id,))
+        c.execute(f"SELECT email, username FROM users WHERE account_id={PLACEHOLDER} AND role='admin' LIMIT 1", (account_id,))
         user_row = c.fetchone()
         
         conn.commit()

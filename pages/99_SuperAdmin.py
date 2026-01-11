@@ -214,12 +214,12 @@ with tab_plans:
                     p_price = st.number_input("Monthly Price (₹)", min_value=0.0, step=100.0)
                     
                     # Multi-Select Modules
-                    p_features = st.multiselect("Included Modules", ALL_MODULES)
+                    p_modules = st.multiselect("Included Modules", ALL_MODULES)
                     
                     submitted = st.form_submit_button("Create Plan", use_container_width=True)
                     if submitted:
                         if p_name:
-                            feat_str = ",".join(p_features)
+                            feat_str = ",".join(p_modules)
                             succ, msg = db.add_plan(p_name, p_price, feat_str)
                             if succ:
                                 st.success(msg)
@@ -236,21 +236,21 @@ with tab_plans:
                     st.info(f"Editing: {mode}")
                     old_name = mode
                     
-                    # Parse existing features
+                    # Parse existing modules
                     existing_feats = []
-                    if selected_plan_data['features']:
-                        existing_feats = str(selected_plan_data['features']).split(',')
+                    if selected_plan_data['modules']:
+                        existing_feats = str(selected_plan_data['modules']).split(',')
                         # Clean whitespace
                         existing_feats = [f.strip() for f in existing_feats if f.strip() in ALL_MODULES]
                     
                     new_name = st.text_input("Plan Name", value=selected_plan_data['name'])
                     new_price = st.number_input("Monthly Price (₹)", min_value=0.0, step=100.0, value=float(selected_plan_data['price']))
-                    new_features = st.multiselect("Included Modules", ALL_MODULES, default=existing_feats)
+                    new_modules = st.multiselect("Included Modules", ALL_MODULES, default=existing_feats)
                     
                     submitted = st.form_submit_button("Update Plan", use_container_width=True)
                     if submitted:
                         if new_name:
-                            feat_str = ",".join(new_features)
+                            feat_str = ",".join(new_modules)
                             succ, msg = db.update_plan(old_name, new_name, new_price, feat_str)
                             
                             if succ:

@@ -165,7 +165,7 @@ with tab2:
                      # Helper to fetch plan details raw
                      conn = db.get_connection()
                      # Fetch Price & Features
-                     plan_row = pd.read_sql_query("SELECT price, features FROM subscription_plans WHERE name = ?", conn, params=(current_plan,))
+                     plan_row = pd.read_sql_query(f"SELECT price, modules FROM subscription_plans WHERE name = {db.PLACEHOLDER}", conn, params=(current_plan,))
                      conn.close()
                      
                      if not plan_row.empty:
@@ -175,7 +175,7 @@ with tab2:
                              bill_cycle = "Monthly" # Default for defined plans
                          
                          if not cust_modules_str:
-                             feat_raw = plan_row.iloc[0]['features']
+                             feat_raw = plan_row.iloc[0]['modules']
                              if feat_raw:
                                  # Map feature keys to pretty names if possible, or just use as is
                                  # The DB has "Inventory,TableLink" -> We should try to map relevant ones or display
@@ -218,13 +218,13 @@ with tab2:
                  # Try to fetch details
                  try:
                      conn = db.get_connection()
-                     plan_row = pd.read_sql_query("SELECT price, features FROM subscription_plans WHERE name = ?", conn, params=(prev_custom,))
+                     plan_row = pd.read_sql_query(f"SELECT price, modules FROM subscription_plans WHERE name = {db.PLACEHOLDER}", conn, params=(prev_custom,))
                      conn.close()
                      if not plan_row.empty:
                          p_price = plan_row.iloc[0]['price']
                          p_bill = f"₹{p_price}"
                          p_cycle = "Monthly"
-                         p_mods = plan_row.iloc[0]['features'] or p_mods
+                         p_mods = plan_row.iloc[0]['modules'] or p_mods
                  except:
                      pass
                      
