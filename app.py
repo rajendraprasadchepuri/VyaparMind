@@ -490,6 +490,11 @@ if not st.session_state["authenticated"]:
                             st.session_state["role"] = result[1]
                             st.session_state["account_id"] = result[2]
                             st.session_state["company_name"] = result[3]
+                            # New: Store Permissions (index 4)
+                            try:
+                                st.session_state["permissions"] = result[4]
+                            except IndexError:
+                                st.session_state["permissions"] = None
                             
                             st.success(f"Welcome back, {login_user}!")
                             st.rerun()
@@ -536,6 +541,11 @@ if not st.session_state["authenticated"]:
 else:
 
     # --- MAIN APPLICATION ---
+    
+    # Redirect Super Admin immediately to their dashboard
+    if st.session_state.get('role') in ['super_admin', 'sales_person']:
+        st.switch_page("pages/99_SuperAdmin.py")
+
     # Show Sidebar
     ui.render_sidebar()
     ui.render_top_header()
@@ -551,11 +561,21 @@ else:
     """)
 
     # Quick Stats (Scoped to Account)
+    # Quick Stats (Scoped to Account, Global for Super Admin)
     try:
         aid = db.get_current_account_id()
+        role = st.session_state.get('role', 'staff')
         conn = db.get_connection()
-        product_count = pd.read_sql_query("SELECT COUNT(*) as count FROM products WHERE account_id = ?", conn, params=(aid,)).iloc[0]['count']
-        transaction_count = pd.read_sql_query("SELECT COUNT(*) as count FROM transactions WHERE account_id = ?", conn, params=(aid,)).iloc[0]['count']
+        
+        if role == 'super_admin':
+             # Global Stats
+             product_count = pd.read_sql_query("SELECT COUNT(*) as count FROM products", conn).iloc[0]['count']
+             transaction_count = pd.read_sql_query("SELECT COUNT(*) as count FROM transactions", conn).iloc[0]['count']
+        else:
+             # Tenant Stats
+             product_count = pd.read_sql_query("SELECT COUNT(*) as count FROM products WHERE account_id = ?", conn, params=(aid,)).iloc[0]['count']
+             transaction_count = pd.read_sql_query("SELECT COUNT(*) as count FROM transactions WHERE account_id = ?", conn, params=(aid,)).iloc[0]['count']
+             
         conn.close()
 
         col1, col2, col3 = st.columns(3)

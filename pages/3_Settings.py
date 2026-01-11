@@ -2,6 +2,7 @@ import streamlit as st
 import database as db
 import ui_components as ui
 import os
+import time
 
 st.set_page_config(page_title="Settings", layout="wide")
 ui.require_auth()
@@ -139,19 +140,136 @@ with tab3:
     
     # Check if current user is Admin
     current_role = st.session_state.get('role', 'staff')
+    
     if current_role != 'admin':
         st.error("⛔ Only Admins can manage users.")
     else:
-        with st.form("add_user_form"):
-            st.markdown("#### Create New Staff User")
-            c1, c2 = st.columns(2)
-            u_name = c1.text_input("Username")
-            u_pass = c2.text_input("Password", type="password")
-            u_role = st.selectbox("Role", ["staff", "manager", "admin"])
+        # --- 1. LIST USERS ---
+        st.markdown("### Existing Users")
+        users_df = db.get_all_account_users()
+        if not users_df.empty:
+            # Show Permissions column to ensure visibility
+            st.dataframe(users_df[['username', 'role', 'email', 'permissions', 'created_at']], use_container_width=True, hide_index=True)
             
-            if st.form_submit_button("Create User"):
-                success, msg = db.create_user(u_name, u_pass, "", role=u_role)
-                if success:
-                    st.success(f"User {u_name} created as {u_role}!")
+            user_list = users_df['username'].tolist()
+            current_username = st.session_state.get('username')
+            # Filter out self for deletion safety in UI (db has check too)
+            manageable_users = [u for u in user_list if u != current_username]
+        else:
+            st.info("No users found.")
+            manageable_users = []
+
+        st.divider()
+
+        # --- 2. MANAGE ACTIONS ---
+        col_m1, col_m2 = st.columns(2, gap="large")
+        
+        with col_m1:
+            with st.container(border=True):
+                st.markdown("#### ➕ Create New User")
+                with st.form("add_user_form"):
+                    u_name = st.text_input("Username")
+                    u_pass = st.text_input("Password", type="password")
+                    u_role = st.selectbox("Role", ["staff", "manager", "admin"])
+                    
+                    if st.form_submit_button("Create User", type="primary", use_container_width=True):
+                        if u_name and u_pass:
+                            success, msg = db.create_user(u_name, u_pass, "", role=u_role)
+                            if success:
+                                st.success(f"User {u_name} created!")
+                                time.sleep(1)
+                                st.rerun()
+                            else:
+                                st.error(msg)
+                        else:
+                            st.warning("Username and Password required.")
+
+        with col_m2:
+            with st.container(border=True):
+                st.markdown("#### 🔧 Manage User")
+                if manageable_users:
+                    selected_user = st.selectbox("Select User", manageable_users)
+                    
+                    action = st.radio("Action", ["Reset Password", "Delete User", "Manage Access"], horizontal=True)
+                    
+                    if action == "Reset Password":
+                        new_pass = st.text_input("New Password", type="password", key="reset_pass_input")
+                        if st.button("Update Password", use_container_width=True):
+                            if new_pass:
+                                succ, msg = db.admin_reset_password(selected_user, new_pass)
+                                if succ:
+                                    st.success(f"Password updated for {selected_user}")
+                                else:
+                                    st.error(msg)
+                            else:
+                                st.warning("Enter new password")
+                                
+                    elif action == "Delete User":
+                        st.warning(f"Are you sure you want to permanently delete {selected_user}?")
+                        if st.button("Confirm Delete", type="primary", use_container_width=True):
+                            succ, msg = db.delete_user(selected_user)
+                            if succ:
+                                st.success(f"User {selected_user} deleted.")
+                                time.sleep(1)
+                                st.rerun()
+                            else:
+                                st.error(msg)
+                                
+                    elif action == "Manage Access":
+                        st.info("Override default role-based access for this user.")
+                        
+                        user_row = users_df[users_df['username'] == selected_user].iloc[0]
+                        current_perms_str = user_row.get('permissions')
+                        
+                        default_modules = []
+                        if current_perms_str and isinstance(current_perms_str, str):
+                            default_modules = [p.strip() for p in current_perms_str.split(',') if p.strip()]
+                            
+                        # Show available modules strictly based on PLAN
+                        current_plan_name = db.get_setting("subscription_plan") or "Starter"
+                        
+                        # Use TIERS from ui_components for consistency
+                        tier_map = ui.TIERS
+                        
+                        if current_plan_name in tier_map:
+                             # Standard Plan
+                             allowed_files = tier_map[current_plan_name]
+                             if '*' in allowed_files:
+                                 # All modules in map
+                                 available_modules = list(ui.MODULE_MAP.keys())
+                             else:
+                                 # Map file basenames back to Feature Names
+                                 inv_map = {v: k for k, v in ui.MODULE_MAP.items()}
+                                 available_modules = []
+                                 for f in allowed_files:
+                                     if f in inv_map:
+                                         available_modules.append(inv_map[f])
+                                     # Basics like Dashboard/Settings are implicit, but 'Dashboard' is in MODULE_MAP
+                        else:
+                             # Custom Plan (DB)
+                             plan_feats = db.get_plan_features(current_plan_name)
+                             available_modules = plan_feats
+                        
+                        # Add basics if missing
+                        basics = ["Dashboard", "Settings"]
+                        for b in basics:
+                            if b not in available_modules:
+                                available_modules.append(b)
+                                
+                        available_modules = sorted(list(set(available_modules)))
+
+                        
+                        selected_modules = st.multiselect("Allowed Modules (Limit by Plan)", 
+                                                        available_modules, default=[m for m in default_modules if m in available_modules])
+                        
+                        if st.button("Update Permissions", use_container_width=True):
+                            succ, msg = db.update_user_permissions(selected_user, selected_modules)
+                            if succ:
+                                st.success("Updated!")
+                                time.sleep(0.5)
+                                st.rerun()
+                            else:
+                                st.error(msg)
+                        
                 else:
-                    st.error(msg)
+                    st.info("No other users to manage.")

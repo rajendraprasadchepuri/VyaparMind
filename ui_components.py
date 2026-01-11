@@ -1,5 +1,74 @@
 import streamlit as st
 
+
+# --- SHARED CONSTANTS ---
+
+# Define All Pages Map
+PAGES = {
+    "Operations": {
+        "📊 Dashboard": "4_Dashboard.py",
+        "💳 POS Terminal": "2_POS.py",
+        "📦 Inventory": "1_Inventory.py",
+        "🍏 FreshFlow (Zero-Waste)": "6_FreshFlow.py",
+        "🚚 VendorTrust": "7_VendorTrust.py",
+        "🗣️ VoiceAudit": "8_VoiceAudit.py",
+        "🍽️ TableLink": "16_TableLink.py",
+    },
+    "Intelligence": {
+        "🌡️ IsoBar (Forecast)": "9_IsoBar.py",
+        "👥 ShiftSmart (Staff)": "10_ShiftSmart.py",
+        "🗺️ GeoViz (Heatmap)": "12_GeoViz.py",
+    },
+    "Innovation": {
+        "🛡️ ChurnGuard": "11_ChurnGuard.py",
+        "🕸️ StockSwap": "13_StockSwap.py",
+        "🧬 ShelfSense": "14_ShelfSense.py",
+        "🔮 CrowdStock": "15_CrowdStock.py",
+    },
+    "Admin": {
+        "⚙️ Settings": "3_Settings.py"
+    },
+    "System": {
+        "🛡️ Super Admin": "99_SuperAdmin.py"
+    }
+}
+
+# Tiers & Roles Config (Mirroring DB Logic for UI consistency)
+TIERS = {
+    'Starter': ['1_Inventory.py', '2_POS.py', '3_Settings.py', '4_Dashboard.py'],
+    'Professional': ['*'],
+    'Business': ['1_Inventory.py', '2_POS.py', '3_Settings.py', '4_Dashboard.py', '6_FreshFlow.py', '7_VendorTrust.py', '8_VoiceAudit.py'],
+    'Enterprise': ['*']
+}
+
+# Mapping "Feature Name" (DB) -> "File Basename" (FileSystem)
+MODULE_MAP = {
+    "Inventory": "1_Inventory.py",
+    "POS Terminal": "2_POS.py",
+    "Settings": "3_Settings.py",
+    "Dashboard": "4_Dashboard.py",
+    "FreshFlow": "6_FreshFlow.py",
+    "VendorTrust": "7_VendorTrust.py",
+    "VoiceAudit": "8_VoiceAudit.py",
+    "IsoBar": "9_IsoBar.py",
+    "ShiftSmart": "10_ShiftSmart.py",
+    "ChurnGuard": "11_ChurnGuard.py",
+    "GeoViz": "12_GeoViz.py",
+    "StockSwap": "13_StockSwap.py",
+    "ShelfSense": "14_ShelfSense.py",
+    "CrowdStock": "15_CrowdStock.py",
+    "TableLink": "16_TableLink.py"
+}
+
+ROLES = {
+    'staff': ['2_POS.py', '8_VoiceAudit.py'], 
+    'manager': ['1_Inventory.py', '2_POS.py', '6_FreshFlow.py', '7_VendorTrust.py', '8_VoiceAudit.py', '4_Dashboard.py'],
+    'admin': ['*'],
+    'super_admin': ['*'],
+    'sales_person': ['99_SuperAdmin.py']
+}
+
+
 def render_sidebar():
     """Renders the common sidebar elements (Logo, Branding, Selector)"""
     
@@ -297,7 +366,9 @@ def render_sidebar():
     # --- CUSTOM NAVIGATION LOGIC ---
     # We rebuild the nav manually to support RBAC/Tiers
     
-    user_role = st.session_state.get('role', 'staff')
+    # We rebuild the nav manually to support RBAC/Tiers
+    
+    user_role = st.session_state.get('role') or 'staff'
     
     # 1. Fetch Subscription
     try:
@@ -312,71 +383,9 @@ def render_sidebar():
     
     st.sidebar.markdown("---")
     
-    # Define All Pages Map
-    # Key: Label, Value: File Path (basename)
-    # We group them for clarity
-    PAGES = {
-        "Operations": {
-            "📊 Dashboard": "4_Dashboard.py",
-            "💳 POS Terminal": "2_POS.py",
-            "📦 Inventory": "1_Inventory.py",
-            "🍏 FreshFlow (Zero-Waste)": "6_FreshFlow.py",
-            "🚚 VendorTrust": "7_VendorTrust.py",
-            "🗣️ VoiceAudit": "8_VoiceAudit.py",
-            "🍽️ TableLink": "16_TableLink.py",
-        },
-        "Intelligence": {
-            "🌡️ IsoBar (Forecast)": "9_IsoBar.py",
-            "👥 ShiftSmart (Staff)": "10_ShiftSmart.py",
-            "🗺️ GeoViz (Heatmap)": "12_GeoViz.py",
-        },
-        "Innovation": {
-            "🛡️ ChurnGuard": "11_ChurnGuard.py",
-            "🕸️ StockSwap": "13_StockSwap.py",
-            "🧬 ShelfSense": "14_ShelfSense.py",
-            "🔮 CrowdStock": "15_CrowdStock.py",
-        },
-        "Admin": {
-            "⚙️ Settings": "3_Settings.py"
-        },
-        "System": {
-            "🛡️ Super Admin": "99_SuperAdmin.py"
-        }
-    }
-    
-    # Tiers & Roles Config (Mirroring DB Logic for UI consistency)
-    TIERS = {
-        'Starter': ['1_Inventory.py', '2_POS.py', '3_Settings.py', '4_Dashboard.py'],
-        'Professional': ['*'],
-        'Business': ['1_Inventory.py', '2_POS.py', '3_Settings.py', '4_Dashboard.py', '6_FreshFlow.py', '7_VendorTrust.py', '8_VoiceAudit.py'],
-        'Enterprise': ['*']
-    }
-    
-    # Mapping "Feature Name" (DB) -> "File Basename" (FileSystem)
-    MODULE_MAP = {
-        "Inventory": "1_Inventory.py",
-        "POS Terminal": "2_POS.py",
-        "Settings": "3_Settings.py",
-        "Dashboard": "4_Dashboard.py",
-        "FreshFlow": "6_FreshFlow.py",
-        "VendorTrust": "7_VendorTrust.py",
-        "VoiceAudit": "8_VoiceAudit.py",
-        "IsoBar": "9_IsoBar.py",
-        "ShiftSmart": "10_ShiftSmart.py",
-        "ChurnGuard": "11_ChurnGuard.py",
-        "GeoViz": "12_GeoViz.py",
-        "StockSwap": "13_StockSwap.py",
-        "ShelfSense": "14_ShelfSense.py",
-        "CrowdStock": "15_CrowdStock.py",
-        "TableLink": "16_TableLink.py"
-    }
+    # Logic uses GLOBAL constants now
+    app_pages = PAGES
 
-    ROLES = {
-        'staff': ['2_POS.py', '8_VoiceAudit.py'], 
-        'manager': ['1_Inventory.py', '2_POS.py', '6_FreshFlow.py', '7_VendorTrust.py', '8_VoiceAudit.py', '4_Dashboard.py'],
-        'admin': ['*'],
-        'super_admin': ['*']
-    }
 
     if sub_plan in TIERS:
         allowed_sub = TIERS[sub_plan]
@@ -399,19 +408,49 @@ def render_sidebar():
 
     allowed_role = ROLES.get(user_role, [])
     
+    # Custom Permissions Override
+    user_perms = st.session_state.get('permissions')
+    if user_perms:
+        # If user has custom permissions, they OVERRIDE role defaults (but still limited by Subscription)
+        # Assuming DB stores comma-separated basenames e.g. "1_Inventory.py,2_POS.py" or Feature Names?
+        # Let's assume Feature Names in DB for better UX, and we map to files here.
+        # Actually, let's look at how we plan to save them. Settings page will likely use Feature Names.
+        # So we need to map Feature Name -> File.
+        
+        custom_allowed = []
+        # DB format: "Inventory,POS Terminal"
+        perm_list = [p.strip() for p in user_perms.split(',')]
+        
+        # Always allow basics - NO, respect Admin selection!
+        # If Admin wants them to have Dashboard, they must select it.
+        # However, for safety, we might want to ensure at least ONE page is allowed?
+        # If list is empty, sidebar renders nothing and user is stuck.
+        # But 'Settings' is usually needed for Logout? No, Logout is in Header.
+        # So we can respect the list fully.
+        
+        # custom_allowed.extend(['4_Dashboard.py', '3_Settings.py']) # REMOVED
+        pass
+        
+        for p in perm_list:
+             if p in MODULE_MAP:
+                 custom_allowed.append(MODULE_MAP[p])
+        
+        # Override Role
+        allowed_role = custom_allowed
+    
     current_page = st.session_state.get("current_page", "")
 
     # Render Groups
     for group, pages in PAGES.items():
         # Super Admin Filter: ONLY show 'System' group
-        if user_role == 'super_admin' and group != 'System':
+        if (user_role == 'super_admin' or user_role == 'sales_person') and group != 'System':
             continue
 
         # Pre-check visibility
         visible_pages = []
         for label, file_path in pages.items():
-             # Special Hide for non-super_admin
-             if "SuperAdmin" in file_path and user_role != "super_admin":
+             # Special Hide for non-super_admin/sales_person
+             if "SuperAdmin" in file_path and user_role not in ["super_admin", "sales_person"]:
                  continue
                  
              is_role = '*' in allowed_role or file_path in allowed_role
@@ -490,9 +529,12 @@ def render_top_header():
             
         with c_logout:
             if st.button("Logout", key="top_logout_btn", type="primary", use_container_width=True):
+                # Clear all auth-related session state
                 st.session_state["authenticated"] = False
                 st.session_state["username"] = None
-                st.rerun()
+                st.session_state["role"] = None
+                st.session_state["current_page"] = "app.py" # Reset page tracking
+                st.switch_page("app.py")
 
 
 # --- SHARED DIALOGS ---

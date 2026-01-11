@@ -1,0 +1,24 @@
+--- ACCOUNTS ---
+                 id           company_name  subscription_plan           created_at     status
+0  1111222233334444  VyaparMind Demo Store            Starter  2026-01-10 13:06:57     ACTIVE
+1  MG4I8QO4ORYF0YC4          TestCorp_Auto            Starter  2026-01-10 13:06:57     ACTIVE
+2  6URKV8Z5K3LUDPJ7                 chings  chings_restaurant  2026-01-10 13:08:27     ACTIVE
+3  0014308436246083       Test Tenant Corp       Professional  2026-01-10 14:18:02  SUSPENDED
+4           SYS_001      VyaparMind System         Enterprise  2026-01-10 14:20:29     ACTIVE
+5  2033131631333738         Suspended Corp            Starter  2026-01-10 14:35:12  SUSPENDED
+6   TEST_SWITCH_001      PlanSwitcher Corp     Universal Tier  2026-01-10 14:43:18     ACTIVE
+7    TEST_BLOCK_001           Blocked Corp            Starter  2026-01-10 14:46:06  SUSPENDED
+8  CNW121ZU6Q5D8DY8              microsoft         Enterprise  2026-01-10 14:50:26     ACTIVE
+
+--- USERS ---
+       username          role        account_id          permissions
+0   tester_auto         admin  MG4I8QO4ORYF0YC4                 None
+1         admin         admin  6URKV8Z5K3LUDPJ7                 None
+2    superadmin   super_admin           SYS_001                 None
+3  suspend_user         admin  2033131631333738                 None
+4  blocked_user         admin    TEST_BLOCK_001                 None
+5         admin         admin  CNW121ZU6Q5D8DY8                 None
+6        vamshi         admin  6URKV8Z5K3LUDPJ7                 None
+7        vamshi  sales_person           SYS_001                 None
+8        vishal   super_admin           SYS_001                 None
+9        staff1         staff  6URKV8Z5K3LUDPJ7  Inventory,TableLink

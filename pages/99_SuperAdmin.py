@@ -15,7 +15,7 @@ def check_access():
     # For now, let's enforce 'super_admin' role check.
     # If user is not logged in or not super admin, stop.
     
-    if 'role' not in st.session_state or st.session_state['role'] != 'super_admin':
+    if 'role' not in st.session_state or st.session_state['role'] not in ['super_admin', 'sales_person']:
         # Backdoor for Dev: If username is 'admin', allow them to elevate to super_admin for this session?
         # No, let's show an access denied screen with a "Switch Mode" button if they are admin.
         
@@ -40,7 +40,22 @@ st.title("🛡️ Super Admin Dashboard")
 st.markdown("Manage Tenants, Subscriptions, and System Health.")
 
 # Tabs
-tab_dash, tab_tenants, tab_plans, tab_billing = st.tabs(["📊 Overview", "🏢 Tenant Management", "💎 Manage Plans", "💳 Billing Reports"])
+
+# Role-based Tabs
+user_role = st.session_state.get('role', 'staff')
+if user_role == 'super_admin':
+    tab_dash, tab_tenants, tab_plans, tab_billing, tab_team = st.tabs(["📊 Overview", "🏢 Tenant Management", "💎 Manage Plans", "💳 Billing Reports", "👥 Manage Team"])
+else:
+    # Sales Person: No Billing, No Plans (Actually requested: "should't have access to billing info... add features sales people need")
+    # "Sales people... onboard new accounts, manage tenants"
+    # User didn't say disable Plans management, but logically maybe strict sales shouldn't change pricing plans? 
+    # For now, let's HIDE Billing only.
+    # Also I need to handle tab unpacking safely.
+    tab_dash, tab_tenants, tab_plans = st.tabs(["📊 Overview", "🏢 Tenant Management", "💎 Manage Plans"])
+    tab_billing = None
+    tab_team = None # Sales people cannot manage the team itself? usually no.
+
+
 
 with tab_dash:
     st.header("System Health")
@@ -259,25 +274,80 @@ with tab_plans:
         else:
             st.info("No custom plans found. Use the form to add one.")
 
-with tab_billing:
-    st.header("Billing & Subscriptions")
-    st.markdown("Overview of all active subscriptions and recurring revenue.")
-    
-    # Mock Billing Data derived from Accounts
-    # Real app would fetch from Stripe/Razorpay
-    
-    if not accounts.empty:
-        billing_data = accounts[['company_name', 'subscription_plan', 'status']].copy()
+
+if tab_billing:
+    with tab_billing:
+        st.header("Billing & Subscriptions")
+        st.markdown("Overview of all active subscriptions and recurring revenue.")
         
-        # Price Mapping
-        prices = {'Starter': 29, 'Professional': 99, 'Enterprise': 299}
-        billing_data['MRR'] = billing_data['subscription_plan'].map(prices)
+        # Mock Billing Data derived from Accounts
+        # Real app would fetch from Stripe/Razorpay
         
-        total_mrr = billing_data[billing_data['status'] == 'ACTIVE']['MRR'].sum()
+        if not accounts.empty:
+            billing_data = accounts[['company_name', 'subscription_plan', 'status']].copy()
+            
+            # Fetch Dynamic Prices
+            plans_df = db.get_all_plans()
+            if not plans_df.empty:
+                 # Create a dictionary: {'Starter': 2999, 'Professional': 5999, ...}
+                 price_map = pd.Series(plans_df.price.values, index=plans_df.name).to_dict()
+            else:
+                 # Fallback Defaults (in INR)
+                 price_map = {'Starter': 2499, 'Professional': 4999, 'Enterprise': 9999}
+            
+            # Map Prices
+            billing_data['MRR'] = billing_data['subscription_plan'].map(price_map).fillna(0)
+            
+            total_mrr = billing_data[billing_data['status'] == 'ACTIVE']['MRR'].sum()
+            
+            st.metric("Total MRR (Monthly Recurring Revenue)", f"₹{total_mrr:,.2f}")
+            
+            st.dataframe(billing_data, use_container_width=True)
+        else:
+            st.info("No accounts found.")
+
+if tab_team:
+    with tab_team:
+        st.header("Manage System Team")
+        st.markdown("Create accounts for Sales People and other System Administrators.")
         
-        st.metric("Total MRR (Monthly Recurring Revenue)", f"${total_mrr:,}")
+        c_team1, c_team2 = st.columns([1, 2], gap="large")
         
-        st.dataframe(billing_data, use_container_width=True)
-    else:
-        st.info("No accounts found.")
+        with c_team1:
+            with st.container(border=True):
+                st.subheader("Add System User")
+                with st.form("add_sys_user"):
+                    su_name = st.text_input("Username")
+                    su_email = st.text_input("Email")
+                    su_pass = st.text_input("Password", type="password")
+                    su_role = st.selectbox("Role", ["sales_person", "super_admin"])
+                    
+                    if st.form_submit_button("Create User", use_container_width=True):
+                        if su_name and su_pass:
+                             # Use db.create_user (defaults to current account, which is System for SuperAdmin)
+                             # We need to ensure we use valid role strings
+                             succ, msg = db.create_user(su_name, su_pass, su_email, role=su_role)
+                             if succ:
+                                 st.success("User Created")
+                                 time.sleep(1)
+                                 st.rerun()
+                             else:
+                                 st.error(msg)
+                        else:
+                            st.warning("Username/Password required")
+
+        with c_team2:
+            st.subheader("System Users")
+            # We need a query to fetch users for this account. 
+            # Since db.create_user uses 'account_id', we can infer we just select from users where account_id = current
+            aid = db.get_current_account_id()
+            conn = db.get_connection()
+            try:
+                team_df = pd.read_sql_query("SELECT username, email, role, created_at FROM users WHERE account_id = ?", conn, params=(aid,))
+                st.dataframe(team_df, use_container_width=True, hide_index=True)
+            except Exception as e:
+                st.error(str(e))
+            finally:
+                conn.close()
+
 

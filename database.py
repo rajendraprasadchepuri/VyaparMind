@@ -1266,8 +1266,9 @@ def verify_user(username, password, company_name_check):
         pwd_hash = hashlib.sha256(password.encode()).hexdigest()
         
         # Strict Login: Match Username + Password + Company Name AND Check Status
+        # Added permissions to SELECT
         query = """
-            SELECT u.role, u.account_id, a.company_name, a.status 
+            SELECT u.role, u.account_id, a.company_name, a.status, u.permissions
             FROM users u 
             JOIN accounts a ON u.account_id = a.id
             WHERE u.username = ? AND u.password_hash = ? AND a.company_name = ?
@@ -1276,13 +1277,13 @@ def verify_user(username, password, company_name_check):
         result = c.fetchone()
         
         if result:
-            role, aid, company, status = result[0], result[1], result[2], result[3]
+            role, aid, company, status, perms = result[0], result[1], result[2], result[3], result[4]
             
             # STRICT CHECK
             if status != 'ACTIVE':
                 return False, "Account is Suspended. Contact Support."
                 
-            return True, role, aid, company
+            return True, role, aid, company, perms
         
         return False, "Invalid credentials or company name."
     except Exception as e:
@@ -1315,6 +1316,75 @@ def initiate_password_reset(contact):
         return False, str(e)
     finally:
          conn.close()
+
+def get_all_account_users():
+    """Returns all users for the current account."""
+    conn = get_connection()
+    aid = get_current_account_id()
+    try:
+        df = pd.read_sql_query("SELECT username, email, role, created_at, permissions FROM users WHERE account_id = ? ORDER BY created_at DESC", conn, params=(aid,))
+        return df
+    except:
+        return pd.DataFrame()
+    finally:
+        conn.close()
+
+def delete_user(username):
+    """Deletes a user from the current account."""
+    conn = get_connection()
+    c = conn.cursor()
+    aid = get_current_account_id()
+    try:
+        # Prevent deleting yourself (basic check, though UI should handle)
+        current_user = st.session_state.get('username')
+        if username == current_user:
+             return False, "Cannot delete your own account."
+
+        c.execute("DELETE FROM users WHERE username = ? AND account_id = ?", (username, aid))
+        if c.rowcount > 0:
+            conn.commit()
+            return True, "User deleted."
+        return False, "User not found."
+    except Exception as e:
+        return False, str(e)
+    finally:
+        conn.close()
+
+def admin_reset_password(username, new_password):
+    """Resets a user's password (Admin Action)."""
+    conn = get_connection()
+    c = conn.cursor()
+    aid = get_current_account_id()
+    try:
+        pwd_hash = hashlib.sha256(new_password.encode()).hexdigest()
+        c.execute("UPDATE users SET password_hash = ? WHERE username = ? AND account_id = ?", (pwd_hash, username, aid))
+        if c.rowcount > 0:
+            conn.commit()
+            return True, "Password reset successfully."
+        return False, "User not found."
+    except Exception as e:
+        return False, str(e)
+    finally:
+        conn.close()
+
+def update_user_permissions(username, permissions_list):
+    """Updates the allowed modules for a user."""
+    conn = get_connection()
+    c = conn.cursor()
+    aid = get_current_account_id()
+    try:
+        perm_str = ",".join(permissions_list) if permissions_list else None
+        
+        c.execute("UPDATE users SET permissions = ? WHERE username = ? AND account_id = ?", (perm_str, username, aid))
+        if c.rowcount > 0:
+            conn.commit()
+            return True, "Permissions updated."
+        return False, "User not found."
+    except Exception as e:
+        return False, str(e)
+    finally:
+        conn.close()
+
 
 def create_purchase_order(supplier_id, expected_date, notes="", override_account_id=None):
     conn = get_connection()
