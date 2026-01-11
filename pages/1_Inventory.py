@@ -160,22 +160,20 @@ with st.expander("📂 Bulk Upload Products (CSV/Excel/Txt)", expanded=False):
 st.subheader("Current Stock")
 
 # Load Data
-df = db.fetch_all_products()
+# Search
+with st.form("search_form_inventory"):
+    search_term = st.text_input("🔍 Search Products", "")
+    if st.form_submit_button("Search"):
+        pass 
+
+# Load Data (Optimized)
+df = db.fetch_all_products(search_term=search_term)
 
 if not df.empty:
-    # Alerts
+    # Alerts (Contextual to search)
     low_stock = df[df['stock_quantity'] < 10]
     if not low_stock.empty:
         st.warning(f"⚠️ {len(low_stock)} items are low on stock!")
-
-    # Search
-    with st.form("search_form_inventory"):
-        search_term = st.text_input("🔍 Search Products", "")
-        if st.form_submit_button("Search"):
-            pass # Form submission triggers rerun which applies filter below
-    
-    if search_term:
-        df = df[df['name'].str.contains(search_term, case=False)]
 
     # Editable Data Editor
     # We use a key to track changes

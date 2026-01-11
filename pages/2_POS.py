@@ -166,23 +166,24 @@ with col_products:
         st.subheader("Select Products")
         
         # Reload inventory every time to get fresh stock
-        inventory = db.fetch_pos_inventory()
+        # OPTIMIZATION: Use server-side search and limit
+        # Get search term from previous run if any (from input key 'pos_search_input' maybe? or just rely on state)
         
-        if not inventory.empty:
-            # Search
-            # Search
-            with st.form("inventory_search_form_pos"):
-                # Align Search Input and Find Button
-                c_s1, c_s2 = st.columns([3, 1], vertical_alignment="bottom")
-                search = c_s1.text_input("Search Item", placeholder="Barcode or Name...")
-                if c_s2.form_submit_button("Find", use_container_width=True):
-                    pass
+        # Search Form
+        with st.form("inventory_search_form_pos"):
+            # Align Search Input and Find Button
+            c_s1, c_s2 = st.columns([3, 1], vertical_alignment="bottom")
+            search_term = c_s1.text_input("Search Item", placeholder="Barcode or Name...")
+            submitted = c_s2.form_submit_button("Find", use_container_width=True)
+        
+        # Fetch Optimized Data
+        if search_term:
+            inventory = db.fetch_pos_inventory(search_term=search_term, limit=100)
+        else:
+            # Default: Show Top 50 by Sales
+            inventory = db.fetch_pos_inventory(limit=50)
             
-            if search:
-                inventory = inventory[inventory['name'].str.contains(search, case=False) | inventory['category'].str.contains(search, case=False)]
-            else:
-                # Default: Show Top 10 by Sales
-                inventory = inventory.sort_values(by='total_sold', ascending=False).head(10)
+        if not inventory.empty:
             
             # Product Grid (using metrics for compact view)
             for _, row in inventory.iterrows():

@@ -148,6 +148,7 @@ def init_db():
             email TEXT,
             password_hash TEXT NOT NULL,
             role TEXT DEFAULT 'admin', -- admin, manager, staff
+            permissions TEXT, -- Comma separated list of allowed modules
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (account_id) REFERENCES accounts(id),
             UNIQUE(account_id, username)
@@ -179,7 +180,8 @@ def init_db():
     
     # transaction_items(transaction_id) for joins
     c.execute("CREATE INDEX IF NOT EXISTS idx_txn_items_txn_id ON transaction_items(transaction_id)")
-    
+
+
     # 9. Suppliers (VendorTrust)
     c.execute('''
         CREATE TABLE IF NOT EXISTS suppliers (
@@ -322,117 +324,17 @@ def init_db():
     c.execute("INSERT OR IGNORE INTO subscription_plans (name, price) VALUES ('Enterprise', 9999)")
 
     # Migration: Accounts Status
-
-    # Migration: Accounts Status
     try:
         c.execute("SELECT status FROM accounts LIMIT 1")
     except:
         c.execute("ALTER TABLE accounts ADD COLUMN status TEXT DEFAULT 'ACTIVE'")
 
-    # VendorTrust Tables
-    c.execute('''
-        CREATE TABLE IF NOT EXISTS suppliers (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            account_id INTEGER DEFAULT 1,
-            name TEXT NOT NULL,
-            contact_person TEXT,
-            phone TEXT,
-            category_specialty TEXT,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (account_id) REFERENCES accounts (id)
-        )
-    ''')
+    # Migration: User Permissions
+    try:
+        c.execute("SELECT permissions FROM users LIMIT 1")
+    except:
+        c.execute("ALTER TABLE users ADD COLUMN permissions TEXT")
 
-    c.execute('''
-        CREATE TABLE IF NOT EXISTS purchase_orders (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            account_id INTEGER DEFAULT 1,
-            supplier_id INTEGER,
-            order_date DATE,
-            expected_date DATE,
-            received_date DATE,
-            status TEXT DEFAULT 'PENDING', -- PENDING, RECEIVED, CANCELLED
-            quality_rating INTEGER DEFAULT 0, -- 1 to 5
-            notes TEXT,
-            FOREIGN KEY (supplier_id) REFERENCES suppliers (id),
-            FOREIGN KEY (account_id) REFERENCES accounts (id)
-        )
-    ''')
-
-    # IsoBar Context Table
-    c.execute('''
-        CREATE TABLE IF NOT EXISTS daily_context (
-            date DATE,
-            account_id INTEGER DEFAULT 1,
-            weather_tag TEXT,
-            event_tag TEXT,
-            notes TEXT,
-            PRIMARY KEY (date, account_id),
-            FOREIGN KEY (account_id) REFERENCES accounts (id)
-        )
-    ''')
-
-    # ShiftSmart Tables
-    c.execute('''
-        CREATE TABLE IF NOT EXISTS staff (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            account_id INTEGER DEFAULT 1,
-            name TEXT NOT NULL,
-            role TEXT,
-            hourly_rate REAL,
-            FOREIGN KEY (account_id) REFERENCES accounts (id)
-        )
-    ''')
-    
-    c.execute('''
-        CREATE TABLE IF NOT EXISTS shifts (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            date DATE,
-            slot TEXT, -- Morning, Evening
-            staff_id INTEGER,
-            FOREIGN KEY (staff_id) REFERENCES staff (id)
-        )
-    ''')
-
-    # StockSwap Table (B2B)
-    c.execute('''
-        CREATE TABLE IF NOT EXISTS b2b_deals (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            store_name TEXT, -- In real app, this is linked to Store ID
-            product_name TEXT,
-            quantity INTEGER,
-            price_per_unit REAL,
-            acc_phone TEXT,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    ''')
-    
-    create_table_management_tables(conn)
-
-    # CrowdStock Table
-    c.execute('''
-        CREATE TABLE IF NOT EXISTS crowd_campaigns (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            item_name TEXT,
-            description TEXT,
-            votes_needed INTEGER,
-            votes_current INTEGER DEFAULT 0,
-            price_est REAL,
-            status TEXT DEFAULT 'ACTIVE' -- ACTIVE, FUNDED, CLOSED
-        )
-    ''')
-
-    # Settings Table Helper (Account Scoped)
-    c.execute('''
-        CREATE TABLE IF NOT EXISTS account_settings (
-            account_id TEXT,
-            key TEXT,
-            value TEXT,
-            PRIMARY KEY (account_id, key),
-            FOREIGN KEY (account_id) REFERENCES accounts(id)
-        )
-    ''')
-    
     conn.commit()
     conn.close()
 
@@ -532,9 +434,25 @@ def _fetch_all_products_impl(account_id):
     conn.close()
     return df
 
-def fetch_all_products(override_account_id=None):
+def fetch_all_products(search_term=None, override_account_id=None):
+    """
+    Optimized fetcher with server-side searching.
+    search_term: Optional string to filter by name or category.
+    """
+    conn = get_connection()
     aid = override_account_id if override_account_id is not None else get_current_account_id()
-    return _fetch_all_products_impl(aid)
+    
+    query = "SELECT * FROM products WHERE account_id = ?"
+    params = [aid]
+    
+    if search_term:
+        query += " AND (name LIKE ? OR category LIKE ?)"
+        wildcard = f"%{search_term}%"
+        params.extend([wildcard, wildcard])
+        
+    df = pd.read_sql_query(query, conn, params=params)
+    conn.close()
+    return df
 
 @st.cache_data(ttl=60)
 def _fetch_pos_inventory_impl(account_id):
@@ -552,9 +470,39 @@ def _fetch_pos_inventory_impl(account_id):
     conn.close()
     return df
 
-def fetch_pos_inventory():
-    aid = get_current_account_id()
-    return _fetch_pos_inventory_impl(aid)
+def fetch_pos_inventory(search_term=None, limit=50, override_account_id=None):
+    """
+    Optimized POS fetcher. 
+    - search_term: Filter by name/category
+    - limit: Max rows to return (default 50 for speed)
+    """
+    conn = get_connection()
+    aid = override_account_id if override_account_id is not None else get_current_account_id()
+    
+    query = """
+        SELECT p.*, COALESCE(SUM(ti.quantity), 0) as total_sold
+        FROM products p
+        LEFT JOIN transaction_items ti ON p.id = ti.product_id
+        WHERE p.account_id = ?
+    """
+    params = [aid]
+    
+    if search_term:
+        query += " AND (p.name LIKE ? OR p.category LIKE ?)"
+        wildcard = f"%{search_term}%"
+        params.extend([wildcard, wildcard])
+        
+    query += " GROUP BY p.id"
+    
+    if not search_term:
+        # If no search, sort by popularity to show best items first
+        query += " ORDER BY total_sold DESC"
+    
+    query += f" LIMIT {limit}"
+    
+    df = pd.read_sql_query(query, conn, params=params)
+    conn.close()
+    return df
 
 @st.cache_data(ttl=300)
 def _fetch_customers_impl(account_id):
@@ -1046,9 +994,9 @@ def add_staff(name, role, rate):
     finally:
         conn.close()
 
-def get_all_staff():
+def get_all_staff(override_account_id=None):
     conn = get_connection()
-    aid = get_current_account_id()
+    aid = override_account_id if override_account_id is not None else get_current_account_id()
     df = pd.read_sql_query("SELECT * FROM staff WHERE account_id = ?", conn, params=(aid,))
     conn.close()
     return df
@@ -1689,5 +1637,41 @@ def delete_plan(plan_name):
         return True, "Plan Deleted."
     except Exception as e:
         return False, str(e)
+    finally:
+        conn.close()
+
+# --- CHURN GUARD OPTIMIZATION ---
+
+def get_churn_metrics(days_threshold=30):
+    """
+    Identifies at-risk customers who haven't purchased in > days_threshold.
+    Optimized to do heavy lifting in SQL.
+    """
+    conn = get_connection()
+    aid = get_current_account_id()
+    
+    # Logic: 
+    # 1. Get max timestamp per customer (Last Seen)
+    # 2. Filter where Last Seen < (Now - Threshold)
+    query = """
+        SELECT 
+            c.id, c.name, c.phone, c.email, 
+            MAX(t.timestamp) as last_seen, 
+            SUM(t.total_amount) as total_spent,
+            (julianday('now') - julianday(MAX(t.timestamp))) as days_since
+        FROM transactions t
+        JOIN customers c ON t.customer_id = c.id
+        WHERE t.account_id = ?
+        GROUP BY c.id
+        HAVING days_since > ?
+        ORDER BY total_spent DESC
+    """
+    
+    try:
+        df = pd.read_sql_query(query, conn, params=(aid, days_threshold))
+        return df
+    except Exception as e:
+        print(f"Churn Metric Error: {e}")
+        return pd.DataFrame()
     finally:
         conn.close()

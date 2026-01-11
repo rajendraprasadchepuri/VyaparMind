@@ -32,10 +32,12 @@ def test_regression():
 
     # 2. Test Login/Verification
     res_a = db.verify_user("admin_a", "pass123", company_name_check=company_a)
-    aid_a = int(res_a[2])
+    assert res_a[0], f"Login failed for A: {res_a[1]}"
+    aid_a = res_a[2]
     
     res_b = db.verify_user("admin_b", "pass123", company_name_check=company_b)
-    aid_b = int(res_b[2])
+    assert res_b[0], f"Login failed for B: {res_b[1]}"
+    aid_b = res_b[2]
     
     print(f"Acc A ID: {aid_a}, Acc B ID: {aid_b}")
     assert aid_a != aid_b, "IDs must be unique"
@@ -47,11 +49,11 @@ def test_regression():
     
     df_a = db.fetch_all_products(override_account_id=aid_a)
     assert len(df_a) == 1, f"Store A should have 1 product, found {len(df_a)}"
-    p_id_a = int(df_a.iloc[0]['id'])
+    p_id_a = df_a.iloc[0]['id']
     
     df_b = db.fetch_all_products(override_account_id=aid_b)
     assert len(df_b) == 1, f"Store B should have 1 product, found {len(df_b)}"
-    p_id_b = int(df_b.iloc[0]['id'])
+    p_id_b = df_b.iloc[0]['id']
 
     # 4. Test FreshFlow (Batches)
     print("--- Testing FreshFlow (Batches) ---")
@@ -74,7 +76,7 @@ def test_regression():
     
     supps_a = db.get_all_suppliers(override_account_id=aid_a)
     assert len(supps_a) == 1, f"Store A should have 1 supplier, found {len(supps_a)}"
-    s_id_a = int(supps_a.iloc[0]['id'])
+    s_id_a = supps_a.iloc[0]['id']
     
     supps_b = db.get_all_suppliers(override_account_id=aid_b)
     assert len(supps_b) == 1, f"Store B should have 1 supplier, found {len(supps_b)}"
@@ -107,6 +109,7 @@ def test_regression():
     # Verify B's stock unchanged (Isolation)
     df_b_new = db.fetch_all_products(override_account_id=aid_b)
     b_stock_new = int(df_b_new.iloc[0]['stock_quantity'])
+
     print(f"Store B Stock: {b_stock_new}")
     assert b_stock_new == 500, f"Store B stock polluted! Expected 500, got {b_stock_new}"
 
@@ -126,9 +129,86 @@ def test_regression():
     e_id_a = staff_a_df.iloc[0]['id']
     
     # Try to assign A's staff to a shift in a context that might be B (if we didn't have scoping)
-    # verify_shift = db.assign_shift("2026-01-20", "Morning", e_id_a, override_account_id=aid_b)
-    # Actually I need to add override_account_id to assign_shift too for testing
+    # Try to assign A's staff to a shift in a context that might be B (if we didn't have scoping)
+    # This simulates Account B trying to schedule Account A's employee
+    succ_shift, msg_shift = db.assign_shift("2026-01-20", "Morning", e_id_a, override_account_id=aid_b)
+    assert not succ_shift, "Account B should NOT be able to assign shifts to Account A's staff!"
+    print(f"Shift Isolation Verified: {msg_shift}")
+    # 9. Test Page Imports (Smoke Test)
+    print("--- Testing Page Imports ---")
+    page_files = [f for f in os.listdir("pages") if f.endswith(".py")]
+    for page in page_files:
+        try:
+            # We can't easily import streamlits pages as modules because they are scripts,
+            # but we can check if they have syntax errors or basic import errors by compiling them.
+            with open(os.path.join("pages", page), "r", encoding='utf-8') as f:
+                compile(f.read(), page, 'exec')
+            print(f"✅ Verified syntax: {page}")
+        except Exception as e:
+            print(f"❌ Syntax Error in {page}: {e}")
+            raise e
+
+    # 10. Test B2B Deals (StockSwap)
+    print("--- Testing StockSwap (B2B) ---")
+    # This module (13_StockSwap.py) writes to b2b_deals table. 
+    # Let's manually verify the table exists and can be written to.
+    conn = db.get_connection()
+    try:
+        conn.execute("INSERT INTO b2b_deals (account_id, store_name, product_name, quantity, price_per_unit) VALUES (?, 'Store A', 'Widget', 10, 5.0)", (aid_a,))
+        conn.commit()
+    except Exception as e:
+        assert False, f"StockSwap DB Error: {e}"
+    finally:
+        conn.close()
     
+    # 11. Test CrowdStock (Campaigns)
+    print("--- Testing CrowdStock ---")
+    conn = db.get_connection()
+    try:
+        conn.execute("INSERT INTO crowd_campaigns (account_id, item_name, votes_needed) VALUES (?, 'New Feature', 100)", (aid_a,))
+        conn.commit()
+    except Exception as e:
+        assert False, f"CrowdStock DB Error: {e}"
+    finally:
+        conn.close()
+        
+    # 12. Test IsoBar (Daily Context)
+    print("--- Testing IsoBar ---")
+    succ_iso, msg_iso = db.set_daily_context("2026-01-01", "Sunny", "None") # verify this function uses proper scoping
+    # Note: set_daily_context uses get_current_account_id() internally which depends on st.session_state.
+    # We set account_id to 1 in __main__, but for multi-tenant we need to fake it if we want to test specific accounts.
+    # The existing regression test uses 'override_account_id' param for most functions, 
+    # but set_daily_context might not have it. Let's check database.py.
+    # Looking at database.py (from context), set_daily_context does NOT take override_account_id.
+    # It strictly uses get_current_account_id().
+    # So we must mock st.session_state['account_id']
+    
+    st.session_state['account_id'] = aid_b
+    succ_iso_b, msg_iso_b = db.set_daily_context("2026-01-02", "Rainy", "Expo")
+    assert succ_iso_b, f"IsoBar Failed for B: {msg_iso_b}"
+    
+    res_iso = db.get_daily_context("2026-01-02")
+    assert res_iso is not None, "Failed to fetch context for B"
+    assert res_iso[2] == "Rainy", "Context retrieval mismatch" # weather_tag is index 2?
+    # Schema: account_id, date, weather_tag, event_tag, notes. OR date, account_id... 
+    # database.py init_db says: CREATE TABLE daily_context (account_id, date, weather_tag...)
+    # So index 0=aid, 1=date, 2=weather. Correct.
+
+    # 13. Optimization Verification (Search)
+    print("--- Testing Search Optimization ---")
+    # Add dummy product for search
+    db.add_product("SearchTestItem", "General", 100, 50, 10, 0, override_account_id=aid_a)
+    
+    # Test fetch_pos_inventory with search
+    df = db.fetch_pos_inventory(search_term="SearchTest", limit=10, override_account_id=aid_a)
+    assert not df.empty, "Search should return results"
+    assert "SearchTestItem" in df['name'].values, "Search result should contain the item"
+    
+    # Test unrelated search
+    df_empty = db.fetch_pos_inventory(search_term="NonExistentThingXYZ", limit=10, override_account_id=aid_a)
+    assert df_empty.empty, "Search for non-existent item should be empty"
+    print("Optimization Search Verified.")
+
     print("\n✅ FINAL EXPANDED REGRESSION TEST PASSED!")
 
 if __name__ == "__main__":

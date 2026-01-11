@@ -44,126 +44,184 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
+# Optimized Data Fetching (SQL Aggregation)
+# Instead of loading ALL transactions, we fetch aggregated metrics directly.
+# This scales to millions of records.
 conn = db.get_connection()
 aid = db.get_current_account_id()
 
-# Load Data (Scoped to Account)
-transactions = pd.read_sql_query("SELECT * FROM transactions WHERE account_id = ?", conn, params=(aid,))
-# Transaction items don't have account_id, but we can filter by transaction_id in the previously filtered transactions
-# Actually, the transactions table has account_id, so we should filter transaction_items by joining with transactions
-items_query = """
-    SELECT ti.* 
-    FROM transaction_items ti 
-    JOIN transactions t ON ti.transaction_id = t.id 
-    WHERE t.account_id = ?
+# Dates
+now = datetime.now()
+curr_month = now.month
+curr_year = now.year
+
+# Previous Month Logic
+first_of_this_month = now.replace(day=1)
+last_month = first_of_this_month - pd.DateOffset(days=1)
+prev_month_num = last_month.month
+prev_year_num = last_month.year
+
+# --- 1. Top Level Metrics (Optimized) ---
+# Current Month Metrics
+q_curr = """
+    SELECT 
+        SUM(t.total_amount) as revenue,
+        SUM(t.total_profit) as profit,
+        SUM(ti.quantity) as items_sold,
+        AVG(t.total_amount) as avg_order
+    FROM transactions t
+    LEFT JOIN transaction_items ti ON t.id = ti.transaction_id
+    WHERE t.account_id = ? 
+    AND strftime('%m', t.timestamp) = ? 
+    AND strftime('%Y', t.timestamp) = ?
 """
-items = pd.read_sql_query(items_query, conn, params=(aid,))
+# Note: strftime returns '01', '02' etc. Python str(month) might be '1'. Pad it.
+c_m_str = f"{curr_month:02d}"
+c_y_str = str(curr_year)
+
+curr_df = pd.read_sql_query(q_curr, conn, params=(aid, c_m_str, c_y_str))
+curr_metrics = curr_df.iloc[0]
+
+# Previous Month Metrics
+q_prev = """
+    SELECT 
+        SUM(t.total_amount) as revenue,
+        SUM(t.total_profit) as profit,
+        SUM(ti.quantity) as items_sold
+    FROM transactions t
+    LEFT JOIN transaction_items ti ON t.id = ti.transaction_id
+    WHERE t.account_id = ? 
+    AND strftime('%m', t.timestamp) = ? 
+    AND strftime('%Y', t.timestamp) = ?
+"""
+p_m_str = f"{prev_month_num:02d}"
+p_y_str = str(prev_year_num)
+
+prev_df = pd.read_sql_query(q_prev, conn, params=(aid, p_m_str, p_y_str))
+prev_metrics = prev_df.iloc[0]
+
 conn.close()
 
-if not transactions.empty:
-    transactions['timestamp'] = pd.to_datetime(transactions['timestamp'])
-    
-    # --- 1. Top Level Metrics (4-Column Grid) ---
-    # Calculate KPIs
-    current_month = datetime.now().month
-    current_year = datetime.now().year
-    
-    # Filter for Current Month
-    df_curr = transactions[(transactions['timestamp'].dt.month == current_month) & (transactions['timestamp'].dt.year == current_year)]
-    # Filter for Previous Month
-    prev_month = (datetime.now().replace(day=1) - pd.DateOffset(days=1))
-    df_prev = transactions[(transactions['timestamp'].dt.month == prev_month.month) & (transactions['timestamp'].dt.year == prev_month.year)]
-    
-    # Current Metrics
-    curr_rev = df_curr['total_amount'].sum()
-    curr_profit = df_curr['total_profit'].sum()
-    curr_items = items[items['transaction_id'].isin(df_curr['id'])]['quantity'].sum()
-    curr_avg = df_curr['total_amount'].mean() if not df_curr.empty else 0
-    
-    # Previous Metrics
-    prev_rev = df_prev['total_amount'].sum()
-    prev_profit = df_prev['total_profit'].sum()
-    prev_items = items[items['transaction_id'].isin(df_prev['id'])]['quantity'].sum()
-    
-    # Calculate Total Revenue (All Time) for Category Insight
-    total_rev = transactions['total_amount'].sum()
-    
-    # Delta Calculations
-    def calc_delta(curr, prev):
-        if prev == 0: return "100%" if curr > 0 else "0%"
-        delta = ((curr - prev) / prev) * 100
-        return f"{delta:+.1f}%"
+# Prepare Values (Handle None from SQL SUM if 0 records)
+c_rev = curr_metrics['revenue'] or 0
+c_prof = curr_metrics['profit'] or 0
+c_items = curr_metrics['items_sold'] or 0
+c_avg = curr_metrics['avg_order'] or 0
 
-    with st.container():
-        c1, c2, c3, c4 = st.columns(4)
-        c1.metric("Revenue (This Month)", f"₹{curr_rev:,.0f}", delta=calc_delta(curr_rev, prev_rev))
-        c2.metric("Net Profit (This Month)", f"₹{curr_profit:,.0f}", delta=calc_delta(curr_profit, prev_profit))
-        c3.metric("Items Sold", int(curr_items), delta=calc_delta(curr_items, prev_items))
-        c4.metric("Avg Order Value", f"₹{curr_avg:,.0f}") # Added comma logic
+p_rev = prev_metrics['revenue'] or 0
+p_prof = prev_metrics['profit'] or 0
+p_items = prev_metrics['items_sold'] or 0
+
+# Delta Logic
+def calc_delta(curr, prev):
+    if prev == 0: return "100%" if curr > 0 else "0%"
+    delta = ((curr - prev) / prev) * 100
+    return f"{delta:+.1f}%"
+
+with st.container():
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Revenue (This Month)", f"₹{c_rev:,.0f}", delta=calc_delta(c_rev, p_rev))
+    c2.metric("Net Profit (This Month)", f"₹{c_prof:,.0f}", delta=calc_delta(c_prof, p_prof))
+    c3.metric("Items Sold", int(c_items), delta=calc_delta(c_items, p_items))
+    c4.metric("Avg Order Value", f"₹{c_avg:,.0f}")
+
+st.markdown("---")
+
+# --- 2. Charts (Optimized) ---
+# Row 1: Big Chart Left (2/3), Pie Chart Right (1/3)
+row1_col1, row1_col2 = st.columns([2, 1])
+
+with row1_col1:
+    st.subheader("📈 Revenue Trends (Daily)")
+    # Optimized Trend Query (Group by Date in SQL)
+    conn = db.get_connection()
+    aid = db.get_current_account_id()
+    q_trend = """
+        SELECT date(timestamp) as date, SUM(total_amount) as total_amount
+        FROM transactions 
+        WHERE account_id = ?
+        GROUP BY date(timestamp)
+        ORDER BY date(timestamp) ASC
+    """
+    trend_df = pd.read_sql_query(q_trend, conn, params=(aid,))
     
-    st.markdown("---")
-    
-    # --- 2. Asymmetric "Combination" Layout (Mosaic) ---
-    # Row 1: Big Chart Left (2/3), Pie Chart Right (1/3)
-    row1_col1, row1_col2 = st.columns([2, 1])
-    
-    with row1_col1:
-        st.subheader("📈 Revenue Trends")
-        # Ensure daily grouping works
-        daily_sales = transactions.resample('D', on='timestamp').sum().reset_index()
-        fig_trend = px.area(daily_sales, x='timestamp', y='total_amount', title="", markers=True, 
+    if not trend_df.empty:
+        fig_trend = px.area(trend_df, x='date', y='total_amount', title="", markers=True, 
                             color_discrete_sequence=['#004e92'])
         fig_trend.update_layout(xaxis_title=None, yaxis_title=None, margin=dict(l=0, r=0, t=0, b=0), height=350)
         st.plotly_chart(fig_trend, use_container_width=True)
+    else:
+        st.info("No sales data for trends.")
+
+with row1_col2:
+    st.subheader("Category Distribution")
+    # Category Query (Optimized Group By)
+    cat_query = '''
+        SELECT p.category, SUM(ti.quantity * ti.price_at_sale) as revenue
+        FROM transaction_items ti
+        JOIN products p ON ti.product_id = p.id
+        JOIN transactions t ON ti.transaction_id = t.id
+        WHERE t.account_id = ?
+        GROUP BY p.category
+    '''
+    cat_df = pd.read_sql_query(cat_query, conn, params=(aid,))
+    conn.close()
+    
+    # Calculate Total Revenue for Insight (All Time)
+    # We need total revenue from db for the percentage calc
+    conn = db.get_connection() # Open fresh or reuse if open (it was closed above)
+    # Re-open for isolated logic or keep open? Let's just quick query.
+    total_rev_all = pd.read_sql_query("SELECT SUM(total_amount) FROM transactions WHERE account_id=?", conn, params=(aid,)).iloc[0][0] or 1
+    conn.close()
+
+    if not cat_df.empty:
+        fig_pie = px.pie(cat_df, values='revenue', names='category', hole=0.6,
+                           color_discrete_sequence=px.colors.sequential.RdBu)
+        fig_pie.update_layout(showlegend=False, margin=dict(l=0, r=0, t=0, b=0), height=200)
         
-    with row1_col2:
-        st.subheader("Category Distribution")
-        # Reuse previous logic for cat_df (Scoped)
-        conn = db.get_connection()
-        aid = db.get_current_account_id()
-        cat_query = '''
-            SELECT p.category, SUM(ti.quantity * ti.price_at_sale) as revenue
-            FROM transaction_items ti
-            JOIN products p ON ti.product_id = p.id
-            JOIN transactions t ON ti.transaction_id = t.id
-            WHERE t.account_id = ?
-            GROUP BY p.category
-        '''
-        cat_df = pd.read_sql_query(cat_query, conn, params=(aid,))
-        conn.close()
+        st.plotly_chart(fig_pie, use_container_width=True)
         
-        if not cat_df.empty:
-            # Fixed: px.donut does not exist. Use px.pie with hole param.
-            fig_pie = px.pie(cat_df, values='revenue', names='category', hole=0.6,
-                               color_discrete_sequence=px.colors.sequential.RdBu)
-            fig_pie.update_layout(showlegend=False, margin=dict(l=0, r=0, t=0, b=0), height=200)
-            
-            # Stack another metric or chart below in this same column (Combination)
-            st.plotly_chart(fig_pie, use_container_width=True)
-            
-            # Mini-insight card below
-            top_cat = cat_df.sort_values('revenue', ascending=False).iloc[0]
-            st.caption(f"**Insight**: *{top_cat['category']}* is driving **{int(top_cat['revenue']/total_rev*100)}%** of sales.")
-        else:
-            st.info("No category data.")
+        top_cat = cat_df.sort_values('revenue', ascending=False).iloc[0]
+        st.caption(f"**Insight**: *{top_cat['category']}* is driving **{int(top_cat['revenue']/total_rev_all*100)}%** of sales.")
+    else:
+        st.info("No category data.")
 
     # Row 2: Full Width "Leaderboard" styled as horizontal bars
     st.subheader("🏆 Product Leaderboard")
-    top_products = items.groupby('product_name').agg({'quantity': 'sum', 'price_at_sale': 'sum'}).sort_values('quantity', ascending=False).head(5).reset_index()
     
-    # Custom HTML Table for "Template" feel
-    # We can use st.dataframe with progress bars for a clean look
-    st.dataframe(
-        top_products,
-        column_config={
-            "product_name": "Product",
-            # Fixed: Cast numpy int64 to native int for JSON serialization
-            "quantity": st.column_config.ProgressColumn("Volume Sold", format="%d", min_value=0, max_value=int(top_products['quantity'].max())),
-            "price_at_sale": st.column_config.NumberColumn("Revenue Generated", format="₹%.2f")
-        },
-        use_container_width=True,
-        hide_index=True
-    )
+    conn = db.get_connection()
+    aid = db.get_current_account_id()
+    
+    leaderboard_query = """
+        SELECT 
+            ti.product_name, 
+            SUM(ti.quantity) as quantity, 
+            SUM(ti.price_at_sale * ti.quantity) as price_at_sale
+        FROM transaction_items ti
+        JOIN transactions t ON ti.transaction_id = t.id
+        WHERE t.account_id = ?
+        GROUP BY ti.product_name
+        ORDER BY quantity DESC
+        LIMIT 5
+    """
+    top_products = pd.read_sql_query(leaderboard_query, conn, params=(aid,))
+    conn.close()
+    
+    if not top_products.empty:
+        # Custom HTML Table for "Template" feel
+        # We can use st.dataframe with progress bars for a clean look
+        st.dataframe(
+            top_products,
+            column_config={
+                "product_name": "Product",
+                "quantity": st.column_config.ProgressColumn("Volume Sold", format="%d", min_value=0, max_value=int(top_products['quantity'].max())),
+                "price_at_sale": st.column_config.NumberColumn("Revenue Generated", format="₹%.2f")
+            },
+            use_container_width=True,
+            hide_index=True
+        )
+    else:
+        st.info("No product sales yet.")
     
     st.markdown("---")
     
@@ -222,6 +280,3 @@ if not transactions.empty:
         st.error(f"Could not load customer data: {e}")
     finally:
         conn.close()
-
-else:
-    st.info("No sales data available yet. Go to POS and streamline some sales!")
