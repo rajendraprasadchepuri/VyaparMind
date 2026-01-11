@@ -11,8 +11,10 @@ PAGES = {
         "📦 Inventory": "1_Inventory.py",
         "🍏 FreshFlow (Zero-Waste)": "6_FreshFlow.py",
         "🚚 VendorTrust": "7_VendorTrust.py",
-        "🗣️ VoiceAudit": "8_VoiceAudit.py",
+                "🗣️ VoiceAudit": "8_VoiceAudit.py",
         "🍽️ TableLink": "16_TableLink.py",
+        "👨‍🍳 Kitchen Display": "17_Kitchen_Display_System.py",
+        "🛵 Online Ordering": "18_Online_Ordering.py",
     },
     "Intelligence": {
         "🌡️ IsoBar (Forecast)": "9_IsoBar.py",
@@ -37,7 +39,7 @@ PAGES = {
 TIERS = {
     'Starter': ['1_Inventory.py', '2_POS.py', '3_Settings.py', '4_Dashboard.py'],
     'Professional': ['*'],
-    'Business': ['1_Inventory.py', '2_POS.py', '3_Settings.py', '4_Dashboard.py', '6_FreshFlow.py', '7_VendorTrust.py', '8_VoiceAudit.py'],
+    'Business': ['1_Inventory.py', '2_POS.py', '3_Settings.py', '4_Dashboard.py', '6_FreshFlow.py', '7_VendorTrust.py', '8_VoiceAudit.py', '16_TableLink.py', '17_Kitchen_Display_System.py', '18_Online_Ordering.py'],
     'Enterprise': ['*']
 }
 
@@ -57,12 +59,14 @@ MODULE_MAP = {
     "StockSwap": "13_StockSwap.py",
     "ShelfSense": "14_ShelfSense.py",
     "CrowdStock": "15_CrowdStock.py",
-    "TableLink": "16_TableLink.py"
+    "TableLink": "16_TableLink.py",
+    "KitchenDisplay": "17_Kitchen_Display_System.py",
+    "OnlineOrdering": "18_Online_Ordering.py"
 }
 
 ROLES = {
-    'staff': ['2_POS.py', '8_VoiceAudit.py'], 
-    'manager': ['1_Inventory.py', '2_POS.py', '6_FreshFlow.py', '7_VendorTrust.py', '8_VoiceAudit.py', '4_Dashboard.py'],
+    'staff': ['2_POS.py', '8_VoiceAudit.py', '17_Kitchen_Display_System.py'], 
+    'manager': ['1_Inventory.py', '2_POS.py', '6_FreshFlow.py', '7_VendorTrust.py', '8_VoiceAudit.py', '4_Dashboard.py', '16_TableLink.py', '17_Kitchen_Display_System.py'],
     'admin': ['*'],
     'super_admin': ['*'],
     'sales_person': ['99_SuperAdmin.py']
@@ -389,15 +393,27 @@ def render_sidebar():
 
     if sub_plan in TIERS:
         allowed_sub = TIERS[sub_plan]
+    elif sub_plan == "Custom":
+        # Custom Plan Logic - Read from Settings
+        import database as db
+        # Fetch standard list like "POS & Inventory, CrowdStock"
+        cust_mods_str = db.get_setting("custom_modules_list") or ""
+        allowed_sub = ["4_Dashboard.py", "3_Settings.py"] 
+        
+        if cust_mods_str:
+            c_list = [m.strip() for m in cust_mods_str.split(',') if m.strip()]
+            for mod_name in c_list:
+                if mod_name in MODULE_MAP:
+                     allowed_sub.append(MODULE_MAP[mod_name])
     else:
-        # Custom Plan Logic
+        # Legacy / DB-based Plan Logic
         import database as db
         feats = db.get_plan_features(sub_plan)
         if feats:
             allowed_sub = ["4_Dashboard.py", "3_Settings.py"] # Always allowed basics
             for f in feats:
-                if f in MODULE_MAP:
-                    allowed_sub.append(MODULE_MAP[f])
+                 if f in MODULE_MAP:
+                     allowed_sub.append(MODULE_MAP[f])
         else:
             # Fallback for completely unknown/legacy plans
             allowed_sub = ['4_Dashboard.py', '3_Settings.py'] # Minimal access
@@ -491,18 +507,27 @@ def render_top_header():
                     margin-bottom: 1rem !important; 
                 }
                 
-                /* Username styling */
-                #user-label {
-                    text-align: right; 
-                    white-space: nowrap; 
-                    font-weight: 600; 
-                    color: #4D4D4D; 
-                    margin-right: 10px;
-                    padding-top: 4px;
+                /* Admin Badge (Simulated Button) Styling - FORCE REFRESH V5 */
+                /* Target ANY disabled button in the top header area */
+                div[data-testid="stHorizontalBlock"] button:disabled {
+                    background-color: #f1f5f9 !important; /* Light Fill */
+                    color: #334155 !important; /* Dark Text */
+                    border: 1px solid #cbd5e1 !important; /* Subtle Border */
+                    opacity: 1 !important;
+                    cursor: default !important;
+                    font-size: 0.9rem !important;
+                    height: 2.2rem !important;
+                    min-height: 2.2rem !important;
+                    padding: 0 12px !important; /* Compact padding */
+                    box-shadow: none !important;
+                    pointer-events: none;
+                    white-space: nowrap !important; /* Prevent text wrapping */
+                    overflow: hidden !important;
+                    text-overflow: ellipsis !important; /* Ellipsis for very long names */
                 }
-                
-                /* Compact Button - Scoped to Header Block Only */
-                div[data-testid="stHorizontalBlock"]:nth-of-type(1) button {
+
+                /* Logout Button Styling */
+                div[data-testid="stHorizontalBlock"] button[kind="primary"] {
                     height: 2.2rem !important;
                     min-height: 2.2rem !important;
                     padding: 0px 20px !important;
@@ -510,22 +535,23 @@ def render_top_header():
                     font-size: 0.9rem !important;
                     font-weight: 600 !important;
                     box-shadow: none !important;
-                    line-height: normal !important; /* Ensure text creates 1 line */
+                    line-height: normal !important; 
+                    white-space: nowrap !important;
                 }
             </style>
         """, unsafe_allow_html=True)
 
         # Uses columns to push content to the far right. 
-        # Ratios: Spacer (4), User Label (2.5), Logout Button (1)
-        # Using vertical_alignment="center" natively to avoid CSS conflicts
-        c_spacer, c_user, c_logout = st.columns([4, 2.5, 1], gap="small", vertical_alignment="center")
+        # Ratios: Allotted more space to username (1.5) and logout (1)
+        c_spacer, c_user, c_logout = st.columns([6, 1.5, 1], gap="small", vertical_alignment="center")
 
         
         with c_user:
             username = st.session_state.get('username')
             if not username or str(username) == 'None':
-                username = 'Admin User'
-            st.markdown(f"<div id='user-label'>👤 {username}</div>", unsafe_allow_html=True)
+                username = 'Admin'
+            # Use disabled button for perfect alignment, but AUTO width
+            st.button(f"👤 {username}", key="user_badge_btn_v5", disabled=True, use_container_width=True)
             
         with c_logout:
             if st.button("Logout", key="top_logout_btn", type="primary", use_container_width=True):
@@ -775,4 +801,118 @@ NET PAYABLE: ₹{total_amount:.2f}
     # Option: We can still offer a close button using Streamlit native if desired, 
     # but user said "Change close preview to print bill", so we focus on that.
     # The Dialog X button exists for closing.
+
+@st.dialog("👨‍🍳 Kitchen Order Ticket (KOT)")
+def show_kot_dialog(items, table_label, server_name="Staff", instructions="", order_id=None):
+    """
+    KOT Dialog for Kitchen (Receipt Style).
+    """
+    
+    # KOT Design Params
+    width_px = 320
+    
+    # 1. Format Time
+    now_str = datetime.now().strftime("%I:%M %p")
+    
+    # 2. Order No Handling
+    order_disp = f"{order_id}" if order_id else "----"
+
+    # HTML Construction (Zero Indentation for Pre-Safe rendering)
+    # Using monospace font to guarantee alignment
+    html_kot = f"""
+<div style="font-family: 'Courier New', Courier, monospace; width: {width_px}px; margin: auto; background: #fff; color: #000; padding: 10px; font-weight: bold;">
+<div style="text-align: center;">==========================</div>
+<div style="text-align: center; font-size: 20px; margin: 5px 0;">K O T</div>
+<div style="text-align: center;">--------------------------</div>
+<div style="display: flex; justify-content: space-between;">
+    <span>Order No :</span>
+    <span>{order_disp}</span>
+</div>
+<div style="display: flex; justify-content: space-between;">
+    <span>Table No :</span>
+    <span>{table_label}</span>
+</div>
+<div style="display: flex; justify-content: space-between;">
+    <span>KOT Time :</span>
+    <span>{now_str}</span>
+</div>
+<div style="display: flex; justify-content: space-between;">
+    <span>Server   :</span>
+    <span>{server_name}</span>
+</div>
+<div style="text-align: center;">--------------------------</div>
+<div style="display: flex; justify-content: space-between; margin-bottom: 5px;">
+    <span>ITEM</span>
+    <span>QTY</span>
+</div>
+<div style="text-align: center;">--------------------------</div>
+"""
+
+    # Group items by section
+    sections = {}
+    for i in items:
+        sec = i.get('section', 'Kitchen')
+        if sec not in sections: sections[sec] = []
+        sections[sec].append(i)
+
+    for sec, sec_items in sections.items():
+        html_kot += f"""
+<div style="text-align: center; background: #eee; margin: 5px 0; padding: 2px;">-- {sec.upper()} --</div>
+"""
+        for i in sec_items:
+            name = i.get('name', 'Item')
+            qty = i.get('qty', 0)
+            
+            html_kot += f"""
+<div style="display: flex; justify-content: space-between; align-items: flex-start;">
+    <span style="flex: 1; padding-right: 10px; word-wrap: break-word;">{name}</span>
+    <span style="white-space: nowrap;">{qty}</span>
+</div>
+"""
+
+    html_kot += f"""
+<div style="text-align: center;">--------------------------</div>
+"""
+
+    if instructions:
+        html_kot += f"""
+<div>Notes: {instructions}</div>
+"""
+    else:
+        html_kot += f"""
+<div>Notes: -</div>
+"""
+
+    html_kot += f"""
+<div style="text-align: center;">==========================</div>
+</div>
+"""
+    
+    # PRINT LOGIC
+    kot_html_wrapped = f'<div id="printable-kot-container" class="printable-kot">{html_kot}</div>'
+    st.markdown(kot_html_wrapped, unsafe_allow_html=True)
+    
+    print_script = """
+    <script>
+        function printKOT() {
+            var content = window.parent.document.getElementById('printable-kot-container').innerHTML;
+            var win = window.open('', '', 'height=600,width=400');
+            win.document.write('<html><head><title>KOT</title></head><body>');
+            win.document.write(content);
+            win.document.write('</body></html>');
+            win.document.close();
+            win.focus();
+            setTimeout(function(){ win.print(); win.close(); }, 500);
+        }
+    </script>
+    <div style="text-align: center; margin-top: 20px;">
+        <button onclick="printKOT()" style="
+            background-color: #E11D48; color: white; border: none; padding: 10px 20px; 
+            font-size: 16px; font-weight: bold; border-radius: 4px; cursor: pointer;
+            font-family: Arial, sans-serif;">
+            🖨️ PRINT TO KITCHEN
+        </button>
+    </div>
+    """
+    st.components.v1.html(print_script, height=80)
 

@@ -187,96 +187,96 @@ with row1_col2:
         st.info("No category data.")
 
     # Row 2: Full Width "Leaderboard" styled as horizontal bars
-    st.subheader("🏆 Product Leaderboard")
-    
-    conn = db.get_connection()
-    aid = db.get_current_account_id()
-    
-    leaderboard_query = """
-        SELECT 
-            ti.product_name, 
-            SUM(ti.quantity) as quantity, 
-            SUM(ti.price_at_sale * ti.quantity) as price_at_sale
-        FROM transaction_items ti
-        JOIN transactions t ON ti.transaction_id = t.id
+st.subheader("🏆 Product Leaderboard")
+
+conn = db.get_connection()
+aid = db.get_current_account_id()
+
+leaderboard_query = """
+    SELECT 
+        ti.product_name, 
+        SUM(ti.quantity) as quantity, 
+        SUM(ti.price_at_sale * ti.quantity) as price_at_sale
+    FROM transaction_items ti
+    JOIN transactions t ON ti.transaction_id = t.id
+    WHERE t.account_id = ?
+    GROUP BY ti.product_name
+    ORDER BY quantity DESC
+    LIMIT 5
+"""
+top_products = pd.read_sql_query(leaderboard_query, conn, params=(aid,))
+conn.close()
+
+if not top_products.empty:
+    # Custom HTML Table for "Template" feel
+    # We can use st.dataframe with progress bars for a clean look
+    st.dataframe(
+        top_products,
+        column_config={
+            "product_name": "Product",
+            "quantity": st.column_config.ProgressColumn("Volume Sold", format="%d", min_value=0, max_value=int(top_products['quantity'].max())),
+            "price_at_sale": st.column_config.NumberColumn("Revenue Generated", format="₹%.2f")
+        },
+        use_container_width=True,
+        hide_index=True
+    )
+else:
+    st.info("No product sales yet.")
+
+st.markdown("---")
+
+# --- 3. Customer Insights (Marketing) ---
+st.subheader("👥 Customer Insights (Marketing)")
+
+conn = db.get_connection()
+aid = db.get_current_account_id()
+try:
+    # Check if we have customer data linked (Scoped)
+    cust_query = '''
+        SELECT c.name, c.email, COUNT(t.id) as visits, SUM(t.total_amount) as total_spend, MAX(t.timestamp) as last_visit
+        FROM transactions t
+        JOIN customers c ON t.customer_id = c.id
         WHERE t.account_id = ?
-        GROUP BY ti.product_name
-        ORDER BY quantity DESC
-        LIMIT 5
-    """
-    top_products = pd.read_sql_query(leaderboard_query, conn, params=(aid,))
-    conn.close()
+        GROUP BY c.id
+        ORDER BY total_spend DESC
+        LIMIT 10
+    '''
+    top_customers = pd.read_sql_query(cust_query, conn, params=(aid,))
     
-    if not top_products.empty:
-        # Custom HTML Table for "Template" feel
-        # We can use st.dataframe with progress bars for a clean look
-        st.dataframe(
-            top_products,
-            column_config={
-                "product_name": "Product",
-                "quantity": st.column_config.ProgressColumn("Volume Sold", format="%d", min_value=0, max_value=int(top_products['quantity'].max())),
-                "price_at_sale": st.column_config.NumberColumn("Revenue Generated", format="₹%.2f")
-            },
-            use_container_width=True,
-            hide_index=True
-        )
-    else:
-        st.info("No product sales yet.")
-    
-    st.markdown("---")
-    
-    # --- 3. Customer Insights (Marketing) ---
-    st.subheader("👥 Customer Insights (Marketing)")
-    
-    conn = db.get_connection()
-    aid = db.get_current_account_id()
-    try:
-        # Check if we have customer data linked (Scoped)
-        cust_query = '''
-            SELECT c.name, c.email, COUNT(t.id) as visits, SUM(t.total_amount) as total_spend, MAX(t.timestamp) as last_visit
-            FROM transactions t
-            JOIN customers c ON t.customer_id = c.id
-            WHERE t.account_id = ?
-            GROUP BY c.id
-            ORDER BY total_spend DESC
-            LIMIT 10
-        '''
-        top_customers = pd.read_sql_query(cust_query, conn, params=(aid,))
+    if not top_customers.empty:
+        c1, c2 = st.columns([2, 1])
         
-        if not top_customers.empty:
-            c1, c2 = st.columns([2, 1])
+        with c1:
+            st.markdown("#### Top Spenders (VIPs)")
+            st.dataframe(
+                top_customers[['name', 'visits', 'total_spend', 'last_visit']],
+                column_config={
+                    "name": "Customer",
+                    "visits": st.column_config.NumberColumn("Visits", format="%d"),
+                    "total_spend": st.column_config.ProgressColumn("Total Spend", format="₹%d", min_value=0, max_value=int(top_customers['total_spend'].max())),
+                    "last_visit": st.column_config.DatetimeColumn("Last Seen", format="D MMM YYYY")
+                },
+                use_container_width=True,
+                hide_index=True
+            )
+        
+        with c2:
+            st.markdown("#### Quick Stats")
+            avg_val = top_customers['total_spend'].mean()
+            retention = len(top_customers[top_customers['visits'] > 1])
             
-            with c1:
-                st.markdown("#### Top Spenders (VIPs)")
-                st.dataframe(
-                    top_customers[['name', 'visits', 'total_spend', 'last_visit']],
-                    column_config={
-                        "name": "Customer",
-                        "visits": st.column_config.NumberColumn("Visits", format="%d"),
-                        "total_spend": st.column_config.ProgressColumn("Total Spend", format="₹%d", min_value=0, max_value=int(top_customers['total_spend'].max())),
-                        "last_visit": st.column_config.DatetimeColumn("Last Seen", format="D MMM YYYY")
-                    },
-                    use_container_width=True,
-                    hide_index=True
-                )
+            st.metric("Avg VIP Value", f"₹{avg_val:,.0f}")
+            st.metric("Returning Customers", retention, help="Customers with > 1 visit")
             
-            with c2:
-                st.markdown("#### Quick Stats")
-                avg_val = top_customers['total_spend'].mean()
-                retention = len(top_customers[top_customers['visits'] > 1])
+            if retention > 0:
+                st.success(f"🚀 {retention} loyal customers identified!")
+            else:
+                st.info("Tip: Encourage repeat visits!")
                 
-                st.metric("Avg VIP Value", f"₹{avg_val:,.0f}")
-                st.metric("Returning Customers", retention, help="Customers with > 1 visit")
-                
-                if retention > 0:
-                    st.success(f"🚀 {retention} loyal customers identified!")
-                else:
-                    st.info("Tip: Encourage repeat visits!")
-                    
-        else:
-            st.info("No customer transaction data yet. Use the POS 'Customer Details' feature to tag sales!", icon="ℹ️")
-            
-    except Exception as e:
-        st.error(f"Could not load customer data: {e}")
-    finally:
-        conn.close()
+    else:
+        st.info("No customer transaction data yet. Use the POS 'Customer Details' feature to tag sales!", icon="ℹ️")
+        
+except Exception as e:
+    st.error(f"Could not load customer data: {e}")
+finally:
+    conn.close()

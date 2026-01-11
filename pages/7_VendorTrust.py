@@ -81,7 +81,8 @@ with tab2:
                 exp_date = st.date_input("Expected Delivery")
                 notes = st.text_area("Order Notes / Items")
                 
-                if st.form_submit_button("Create PO"):
+                submitted = st.form_submit_button("Create PO")
+                if submitted:
                     success, msg = db.create_purchase_order(int(s_id), exp_date, notes)
                     if success:
                         st.success("PO Created!")
@@ -90,6 +91,8 @@ with tab2:
                         st.error(msg)
             else:
                 st.warning("Add suppliers first.")
+                # Must render button even if disabled/useless to satisfy Streamlit
+                st.form_submit_button("Create PO", disabled=True)
 
     with col_r:
         st.write("#### Open Orders (Receive)")

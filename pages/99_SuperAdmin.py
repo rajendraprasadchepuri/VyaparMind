@@ -44,7 +44,7 @@ st.markdown("Manage Tenants, Subscriptions, and System Health.")
 # Role-based Tabs
 user_role = st.session_state.get('role', 'staff')
 if user_role == 'super_admin':
-    tab_dash, tab_tenants, tab_plans, tab_billing, tab_team = st.tabs(["📊 Overview", "🏢 Tenant Management", "💎 Manage Plans", "💳 Billing Reports", "👥 Manage Team"])
+    tab_dash, tab_tenants, tab_plans, tab_billing, tab_team, tab_approvals = st.tabs(["📊 Overview", "🏢 Tenant Management", "💎 Manage Plans", "💳 Billing Reports", "👥 Manage Team", "✅ Approvals"])
 else:
     # Sales Person: No Billing, No Plans (Actually requested: "should't have access to billing info... add features sales people need")
     # "Sales people... onboard new accounts, manage tenants"
@@ -98,9 +98,20 @@ with tab_tenants:
                 else:
                     st.error(f"❌ {msg}")
 
+    st.subheader("Active Tenants")
+    # 🔍 Search Bar
+    search_query = st.text_input("Search Tenants", placeholder="Search by Company Name or ID...", label_visibility="collapsed")
+    
     # List Tenants
     accounts = db.fetch_all_accounts()
     
+    # Filter by search
+    if search_query:
+        accounts = accounts[
+            accounts['company_name'].str.contains(search_query, case=False, na=False) |
+            accounts['id'].str.contains(search_query, case=False, na=False)
+        ]
+
     # Fetch available plans for the dropdown
     all_plans_df = db.get_all_plans()
     try:
@@ -111,73 +122,72 @@ with tab_tenants:
     except:
         available_plans = ["Starter", "Professional", "Enterprise"]
 
-    for index, row in accounts.iterrows():
-        with st.container(border=True):
-            cols = st.columns([3, 2, 2, 2, 2])
-            cols[0].subheader(row['company_name'])
-            cols[0].caption(f"ID: {row['id']}")
-            
-            # Mutable Plan Selection
-            current_plan = row['subscription_plan']
-            
-            # Ensure current plan is in list (handle legacy data)
-            display_plans = list(available_plans)
-            if current_plan not in display_plans:
-                display_plans.append(current_plan)
-                
-            try:
-                p_idx = display_plans.index(current_plan)
-            except:
-                p_idx = 0
-                
-            selected_plan = cols[1].selectbox("Plan", display_plans, index=p_idx, key=f"sel_plan_{row['id']}", label_visibility="collapsed")
-            
-            # Update Button (Only visible if changed - ideally, but limitations apply. Just show 'Update' button?)
-            # Better UX: Small 'Save' button below if we want, or just always show "Update Plan" icon button.
-            # Let's use a small primary button for update
-            if selected_plan != current_plan:
-                 if cols[1].button("💾 Save", key=f"save_plan_{row['id']}", help="Update Subscription Plan"):
-                     succ, msg = db.update_tenant_plan(row['id'], selected_plan)
-                     if succ:
-                         st.success("Updated")
-                         time.sleep(0.5)
-                         st.rerun()
-                     else:
-                         st.error("Failed")
-            
-            cols[2].text("Status")
-            status_color = "green" if row['status'] == 'ACTIVE' else "red"
-            cols[2].markdown(f":{status_color}[{row['status']}]")
-            
-            cols[3].text("Actions")
-            # Don't show actions for System Account
-            is_system = (row['id'] == 'SYS_001' or row['id'] == '1111222233334444' or row['company_name'] == 'VyaparMind System')
-            
-            if is_system:
-                cols[3].info("Protected")
-            elif row['status'] == 'ACTIVE':
-                if cols[3].button("Suspend", key=f"susp_{row['id']}"):
-                    db.update_tenant_status(row['id'], 'SUSPENDED')
-                    st.rerun()
-            else:
-                if cols[3].button("Activate", key=f"act_{row['id']}"):
-                    db.update_tenant_status(row['id'], 'ACTIVE')
-                    st.rerun()
+    # Scrollable container (Height for ~5 tenants)
+    with st.container(height=550):
+        if accounts.empty:
+            st.info("No tenants found.")
+        else:
+            for index, row in accounts.iterrows():
+                with st.container(border=True):
+                    cols = st.columns([3, 2, 2, 2, 2])
+                    cols[0].subheader(row['company_name'])
+                    cols[0].caption(f"ID: {row['id']}")
+                    
+                    # Mutable Plan Selection
+                    current_plan = row['subscription_plan']
+                    
+                    # Ensure current plan is in list (handle legacy data)
+                    display_plans = list(available_plans)
+                    if current_plan not in display_plans:
+                        display_plans.append(current_plan)
+                        
+                    try:
+                        p_idx = display_plans.index(current_plan)
+                    except:
+                        p_idx = 0
+                        
+                    selected_plan = cols[1].selectbox("Plan", display_plans, index=p_idx, key=f"sel_plan_{row['id']}", label_visibility="collapsed")
+                    
+                    # Update Button
+                    if selected_plan != current_plan:
+                         if cols[1].button("💾 Save", key=f"save_plan_{row['id']}", help="Update Subscription Plan"):
+                             succ, msg = db.update_tenant_plan(row['id'], selected_plan)
+                             if succ:
+                                 st.success("Updated")
+                                 time.sleep(0.5)
+                                 st.rerun()
+                             else:
+                                 st.error("Failed")
+                    
+                    cols[2].text("Status")
+                    status_color = "green" if row['status'] == 'ACTIVE' else "red"
+                    cols[2].markdown(f":{status_color}[{row['status']}]")
+                    
+                    cols[3].text("Actions")
+                    # Don't show actions for System Account
+                    is_system = (row['id'] == 'SYS_001' or row['id'] == '1111222233334444' or row['company_name'] == 'VyaparMind System')
+                    
+                    if is_system:
+                        cols[3].info("Protected")
+                    elif row['status'] == 'ACTIVE':
+                        if cols[3].button("Suspend", key=f"susp_{row['id']}"):
+                            db.update_tenant_status(row['id'], 'SUSPENDED')
+                            st.rerun()
+                    else:
+                        if cols[3].button("Activate", key=f"act_{row['id']}"):
+                            db.update_tenant_status(row['id'], 'ACTIVE')
+                            st.rerun()
 
-            cols[4].text("Created")
-            cols[4].caption(row['created_at'])
+                    cols[4].text("Created")
+                    cols[4].caption(row['created_at'])
 
 
 with tab_plans:
     st.header("Manage Subscription Plans")
     st.markdown("Create and manage strict pricing tiers.")
     
-    # Constants (Master List of Modules)
-    ALL_MODULES = [
-        "Inventory", "POS Terminal", "FreshFlow", "VendorTrust", 
-        "VoiceAudit", "TableLink", "IsoBar", "ShiftSmart", 
-        "GeoViz", "ChurnGuard", "StockSwap", "ShelfSense", "CrowdStock"
-    ]
+    # Dynamic List of Modules from UI Registration
+    ALL_MODULES = list(ui.MODULE_MAP.keys())
     
     col_p1, col_p2 = st.columns([1, 2], gap="large")
     
@@ -280,11 +290,12 @@ if tab_billing:
         st.header("Billing & Subscriptions")
         st.markdown("Overview of all active subscriptions and recurring revenue.")
         
-        # Mock Billing Data derived from Accounts
-        # Real app would fetch from Stripe/Razorpay
+        # Fetch fresh accounts for billing to avoid search filters from other tabs
+        all_accounts = db.fetch_all_accounts()
         
-        if not accounts.empty:
-            billing_data = accounts[['company_name', 'subscription_plan', 'status']].copy()
+        if not all_accounts.empty:
+            billing_data = all_accounts[['id', 'company_name', 'subscription_plan', 'status']].copy()
+            billing_data.rename(columns={'id': 'Account ID'}, inplace=True)
             
             # Fetch Dynamic Prices
             plans_df = db.get_all_plans()
@@ -351,3 +362,37 @@ if tab_team:
                 conn.close()
 
 
+
+# --- APPROVALS TAB ---
+if user_role == 'super_admin' and 'tab_approvals' in locals():
+    with tab_approvals:
+        st.header("⏳ Pending Approvals")
+        st.markdown("Review and approve new signup requests.")
+        
+        pending_df = db.get_pending_accounts()
+        
+        if not pending_df.empty:
+            st.info(f"Found {len(pending_df)} pending requests.")
+            
+            for idx, row in pending_df.iterrows():
+                with st.container(border=True):
+                    c1, c2, c3, c4 = st.columns([2, 2, 2, 2])
+                    
+                    c1.subheader(row['company_name'])
+                    c1.caption(row['id'])
+                    
+                    c2.markdown(f"**Plan:** {row['subscription_plan']}")
+                    c2.text(f"Requested: {row['created_at']}")
+                    
+                    c3.markdown("**Status:** :orange[PENDING]")
+                    
+                    if c4.button("✅ Approve & Notify", key=f"appr_{row['id']}", type="primary"):
+                        succ, msg = db.approve_account(row['id'])
+                        if succ:
+                            st.success(msg)
+                            time.sleep(2)
+                            st.rerun()
+                        else:
+                            st.error(msg)
+        else:
+            st.success("No pending approvals! All caught up. 🎉")

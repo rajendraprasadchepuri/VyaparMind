@@ -180,8 +180,8 @@ with col_products:
         if search_term:
             inventory = db.fetch_pos_inventory(search_term=search_term, limit=100)
         else:
-            # Default: Show Top 50 by Sales
-            inventory = db.fetch_pos_inventory(limit=50)
+            # Default: Show Top 10 by Sales (User Request)
+            inventory = db.fetch_pos_inventory(limit=10)
             
         if not inventory.empty:
             

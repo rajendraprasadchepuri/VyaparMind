@@ -335,6 +335,10 @@ def init_db():
     except:
         c.execute("ALTER TABLE users ADD COLUMN permissions TEXT")
 
+    # Ensure Restaurant Tables are created/migrated
+    create_table_management_tables(conn)
+    create_online_integration_tables(conn)
+
     conn.commit()
     conn.close()
 
@@ -766,11 +770,30 @@ def create_table_management_tables(conn):
             account_id TEXT DEFAULT '1111222233334444',
             label TEXT,
             capacity INTEGER DEFAULT 4,
-            status TEXT DEFAULT 'Available', -- Available, Occupied
+            status TEXT DEFAULT 'Available', -- Available, Occupied, Reserved, Bill Requested
             current_order_id TEXT,
+            waiter_id TEXT, -- Assigned Waiter
+            pos_x INTEGER DEFAULT 0, -- Grid X
+            pos_y INTEGER DEFAULT 0, -- Grid Y
+            merged_with TEXT, -- ID of parent table if merged
             FOREIGN KEY (account_id) REFERENCES accounts(id)
         )
     ''')
+
+    # MIGRATION: Attempt to add columns to existing tables
+    try:
+        c.execute("ALTER TABLE restaurant_tables ADD COLUMN waiter_id TEXT")
+    except: pass
+    try:
+        c.execute("ALTER TABLE restaurant_tables ADD COLUMN pos_x INTEGER DEFAULT 0")
+    except: pass
+    try:
+        c.execute("ALTER TABLE restaurant_tables ADD COLUMN pos_y INTEGER DEFAULT 0")
+    except: pass
+    try:
+        c.execute("ALTER TABLE restaurant_tables ADD COLUMN merged_with TEXT")
+    except: pass
+
     
     # Active Table Orders (Temporary holding before Transaction)
     c.execute('''
@@ -839,6 +862,16 @@ def get_table_order(table_id):
         return res[0], json.loads(res[1])
     return None, []
 
+def _get_kot_section(category):
+    """Helper to route items to sections based on category"""
+    if not category: return "Kitchen"
+    cat = category.lower()
+    if any(k in cat for k in ['bar', 'cocktail', 'wine', 'beer', 'drink', 'beverage', 'alcohol']):
+        return "Bar"
+    if any(k in cat for k in ['dessert', 'ice cream', 'cake', 'sweet']):
+        return "Dessert"
+    return "Kitchen"
+
 def add_item_to_table(table_id, item_dict):
     conn = get_connection()
     c = conn.cursor()
@@ -847,16 +880,23 @@ def add_item_to_table(table_id, item_dict):
         order_id, current_items = get_table_order(table_id)
         if order_id is None: return False
         
-        # Check if item exists to merge
+        # Route item to section if not already set
+        if 'section' not in item_dict:
+            item_dict['section'] = _get_kot_section(item_dict.get('category'))
+            
+        # Check if item exists to merge (only merge if status is pending)
         found = False
         for i in current_items:
-            if i['id'] == item_dict['id']:
+            if i['id'] == item_dict['id'] and i.get('status', 'pending') == 'pending':
                 i['qty'] += item_dict['qty']
                 i['total'] += item_dict['total']
                 found = True
                 break
         
         if not found:
+            # Ensure new item has pending status
+            if 'status' not in item_dict:
+                item_dict['status'] = 'pending'
             current_items.append(item_dict)
             
         import json
@@ -899,10 +939,10 @@ def delete_restaurant_table(table_id):
     try:
         # Check if occupied
         c.execute("SELECT status FROM restaurant_tables WHERE id = ?", (table_id,))
-        status = c.fetchone()[0]
-        if status != 'Available':
-            return False, "Cannot delete occupied table!"
-        
+        res = c.fetchone()
+        if res and res[0] != 'Available':
+            return False, "Cannot delete occupied table"
+            
         c.execute("DELETE FROM restaurant_tables WHERE id = ?", (table_id,))
         conn.commit()
         return True, "Table Deleted"
@@ -910,6 +950,104 @@ def delete_restaurant_table(table_id):
         return False, str(e)
     finally:
         conn.close()
+
+def update_table_status(table_id, status):
+    conn = get_connection()
+    c = conn.cursor()
+    try:
+        c.execute("UPDATE restaurant_tables SET status = ? WHERE id = ?", (status, table_id))
+        conn.commit()
+        return True
+    finally:
+        conn.close()
+
+def transfer_table(table_id, waiter_name):
+    conn = get_connection()
+    c = conn.cursor()
+    try:
+        c.execute("UPDATE restaurant_tables SET waiter_id = ? WHERE id = ?", (waiter_name, table_id))
+        conn.commit()
+        return True
+    finally:
+        conn.close()
+
+def merge_tables(parent_id, child_ids):
+    conn = get_connection()
+    c = conn.cursor()
+    try:
+        for child in child_ids:
+            c.execute("UPDATE restaurant_tables SET merged_with = ? WHERE id = ?", (parent_id, child))
+        conn.commit()
+        return True
+    finally:
+        conn.close()
+
+def unmerge_table(table_id):
+    conn = get_connection()
+    c = conn.cursor()
+    try:
+        # If this is a child, unmerge it
+        c.execute("UPDATE restaurant_tables SET merged_with = NULL WHERE id = ?", (table_id,))
+        # If this is a parent, unmerge all children
+        c.execute("UPDATE restaurant_tables SET merged_with = NULL WHERE merged_with = ?", (table_id,))
+        conn.commit()
+        return True
+    finally:
+        conn.close()
+
+def update_table_position(table_id, x, y):
+    conn = get_connection()
+    c = conn.cursor()
+    try:
+        c.execute("UPDATE restaurant_tables SET pos_x = ?, pos_y = ? WHERE id = ?", (x, y, table_id))
+        conn.commit()
+        return True
+    finally:
+        conn.close()
+
+def get_enriched_tables():
+    """Replacment for fetch_floor_status to include new columns"""
+    conn = get_connection()
+    c = conn.cursor()
+    aid = get_current_account_id()
+    
+    # Left Join to get active order details
+    query = """
+        SELECT t.id, t.label, t.capacity, t.status, t.current_order_id, t.waiter_id, t.pos_x, t.pos_y, t.merged_with,
+               o.start_time, o.items_json
+        FROM restaurant_tables t
+        LEFT JOIN table_orders o ON t.current_order_id = o.id
+        WHERE t.account_id = ?
+    """
+    df = pd.read_sql_query(query, conn, params=(aid,))
+    conn.close()
+    
+    # Process JSON
+    import json
+    results = []
+    for _, row in df.iterrows():
+        items = []
+        if row['items_json']:
+            try:
+                items = json.loads(row['items_json'])
+            except: pass
+            
+        results.append({
+            'id': row['id'],
+            'label': row['label'],
+            'capacity': row['capacity'],
+            'status': row['status'],
+            'waiter_id': row['waiter_id'],
+            'pos_x': row['pos_x'],
+            'pos_y': row['pos_y'],
+            'merged_with': row['merged_with'],
+            'start_time': row['start_time'],
+            'items': items
+        })
+    return results
+
+
+
 
 def update_restaurant_table_capacity(table_id, new_capacity):
     conn = get_connection()
@@ -923,8 +1061,258 @@ def update_restaurant_table_capacity(table_id, new_capacity):
     finally:
         conn.close()
 
+def mark_items_kot_printed(table_id):
+    conn = get_connection()
+    c = conn.cursor()
+    try:
+        aid = get_current_account_id()
+        # Get current items
+        query = """
+            SELECT o.id, o.items_json 
+            FROM restaurant_tables t
+            JOIN table_orders o ON t.current_order_id = o.id
+            WHERE t.id = ?
+        """
+        c.execute(query, (table_id,))
+        res = c.fetchone()
+        
+        if not res: return False, "No active order", None
+        
+        order_id = res[0]
+        import json
+        items = json.loads(res[1])
+        
+        modified = False
+        for i in items:
+            if i.get('status', 'pending') == 'pending':
+                i['status'] = 'ordered' # Sent to kitchen
+                # Add timestamp for KDS tracking
+                i['ordered_at'] = datetime.utcnow().isoformat()
+                modified = True
+                
+        if modified:
+            new_json = json.dumps(items)
+            c.execute("UPDATE table_orders SET items_json = ? WHERE id = ?", (new_json, order_id))
+            conn.commit()
+            return True, "KOT Sent", order_id
+        return False, "No new items", order_id
+    except Exception as e:
+        return False, str(e), None
+    finally:
+        conn.close()
+
+def cancel_table_item(table_id, item_idx):
+    """Marks an item as Cancelled instead of deleting it (for audit)"""
+    conn = get_connection()
+    c = conn.cursor()
+    try:
+        order_id, items = get_table_order(table_id)
+        if not order_id or item_idx >= len(items): return False
+        
+        # Items already sent to kitchen? Mark as cancelled.
+        # Pending items? Just remove or mark? 
+        # User wants "Cancel KOT" which usually means already sent.
+        items[item_idx]['status'] = 'cancelled'
+        items[item_idx]['cancelled_at'] = datetime.utcnow().isoformat()
+        
+        import json
+        c.execute("UPDATE table_orders SET items_json = ? WHERE id = ?", (json.dumps(items), order_id))
+        conn.commit()
+        return True
+    except Exception as e:
+        print(e)
+        return False
+    finally:
+        conn.close()
+
+def get_table_kot_history(table_id):
+    """Fetches all items that have been sent to kitchen for reprinting"""
+    _, items = get_table_order(table_id)
+    # Filter for anything not pending
+    sent_items = [i for i in items if i.get('status') not in ['pending', 'cancelled']]
+    return sent_items
+
+def update_item_kds_status(table_id, item_idx, new_status):
+    conn = get_connection()
+    c = conn.cursor()
+    try:
+        query = """
+            SELECT o.id, o.items_json 
+            FROM restaurant_tables t
+            JOIN table_orders o ON t.current_order_id = o.id
+            WHERE t.id = ?
+        """
+        c.execute(query, (table_id,))
+        res = c.fetchone()
+        
+        if not res: return False
+        order_id = res[0]
+        import json
+        items = json.loads(res[1])
+        
+        if 0 <= item_idx < len(items):
+            items[item_idx]['status'] = new_status
+            c.execute("UPDATE table_orders SET items_json = ? WHERE id = ?", (json.dumps(items), order_id))
+            conn.commit()
+            return True
+        return False
+    except Exception as e:
+        print(e)
+        return False
+    finally:
+        conn.close()
+
 
         
+
+# --- ONLINE ORDERING INTEGRATION (SWIGGY/ZOMATO) ---
+
+def create_online_integration_tables(conn):
+    c = conn.cursor()
+    
+    # 1. Online Menu Mapping
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS online_menu_mapping (
+            id TEXT PRIMARY KEY,
+            account_id TEXT DEFAULT '1111222233334444',
+            platform TEXT, -- SWIGGY, ZOMATO
+            external_item_name TEXT,
+            internal_product_id TEXT,
+            FOREIGN KEY (account_id) REFERENCES accounts(id),
+            FOREIGN KEY (internal_product_id) REFERENCES products(id)
+        )
+    ''')
+
+    # 2. Online Orders Sync
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS online_orders_sync (
+            id TEXT PRIMARY KEY,
+            account_id TEXT DEFAULT '1111222233334444',
+            platform TEXT,
+            external_order_id TEXT,
+            items_json TEXT,
+            status TEXT DEFAULT 'PENDING', -- PENDING, ACCEPTED, REJECTED
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (account_id) REFERENCES accounts(id)
+        )
+    ''')
+    conn.commit()
+
+def map_online_item(platform, ext_name, int_prod_id):
+    conn = get_connection()
+    c = conn.cursor()
+    aid = get_current_account_id()
+    try:
+        mapping_id = generate_unique_id(16)
+        # Check if exists (upsert)
+        c.execute("DELETE FROM online_menu_mapping WHERE platform = ? AND external_item_name = ? AND account_id = ?", (platform, ext_name, aid))
+        c.execute("INSERT INTO online_menu_mapping (id, account_id, platform, external_item_name, internal_product_id) VALUES (?, ?, ?, ?, ?)",
+                  (mapping_id, aid, platform, ext_name, int_prod_id))
+        conn.commit()
+        return True
+    except Exception as e:
+        print(e)
+        return False
+    finally:
+        conn.close()
+
+def get_online_mappings(platform=None):
+    conn = get_connection()
+    aid = get_current_account_id()
+    query = "SELECT m.*, p.name as internal_name FROM online_menu_mapping m JOIN products p ON m.internal_product_id = p.id WHERE m.account_id = ?"
+    params = [aid]
+    if platform:
+        query += " AND m.platform = ?"
+        params.append(platform)
+    df = pd.read_sql_query(query, conn, params=params)
+    conn.close()
+    return df
+
+def sync_online_order(platform, ext_order_id, items_list):
+    """
+    Ingests an online order. 
+    items_list: list of dicts {'name': external_name, 'qty': qty}
+    """
+    conn = get_connection()
+    c = conn.cursor()
+    aid = get_current_account_id()
+    try:
+        import json
+        order_id = generate_unique_id(16)
+        c.execute("INSERT INTO online_orders_sync (id, account_id, platform, external_order_id, items_json) VALUES (?, ?, ?, ?, ?)",
+                  (order_id, aid, platform, ext_order_id, json.dumps(items_list)))
+        conn.commit()
+        return order_id
+    except Exception as e:
+        print(e)
+        return None
+    finally:
+        conn.close()
+
+def get_pending_online_orders():
+    conn = get_connection()
+    aid = get_current_account_id()
+    try:
+        df = pd.read_sql_query("SELECT * FROM online_orders_sync WHERE account_id = ? AND status = 'PENDING' ORDER BY created_at DESC", conn, params=(aid,))
+        conn.close()
+        return df
+    except:
+        # Table might be missing if just added
+        create_online_integration_tables(conn)
+        conn = get_connection() # Re-open
+        df = pd.read_sql_query("SELECT * FROM online_orders_sync WHERE account_id = ? AND status = 'PENDING' ORDER BY created_at DESC", conn, params=(aid,))
+        conn.close()
+        return df
+
+def get_accepted_online_orders():
+    conn = get_connection()
+    aid = get_current_account_id()
+    try:
+        df = pd.read_sql_query("SELECT * FROM online_orders_sync WHERE account_id = ? AND status = 'ACCEPTED' ORDER BY created_at DESC", conn, params=(aid,))
+        conn.close()
+        return df
+    except:
+        # Table might be missing
+        create_online_integration_tables(conn)
+        conn = get_connection() # Re-open
+        df = pd.read_sql_query("SELECT * FROM online_orders_sync WHERE account_id = ? AND status = 'ACCEPTED' ORDER BY created_at DESC", conn, params=(aid,))
+        conn.close()
+        return df
+
+def update_online_order_status(sync_id, new_status):
+    conn = get_connection()
+    c = conn.cursor()
+    try:
+        c.execute("UPDATE online_orders_sync SET status = ? WHERE id = ?", (new_status, sync_id))
+        conn.commit()
+        return True
+    except Exception as e:
+        print(e)
+        return False
+    finally:
+        conn.close()
+
+def update_online_item_kds_status(sync_id, item_idx, new_status):
+    conn = get_connection()
+    c = conn.cursor()
+    try:
+        c.execute("SELECT items_json FROM online_orders_sync WHERE id = ?", (sync_id,))
+        res = c.fetchone()
+        if not res: return False
+        
+        import json
+        items = json.loads(res[0])
+        if 0 <= item_idx < len(items):
+            items[item_idx]['status'] = new_status
+            c.execute("UPDATE online_orders_sync SET items_json = ? WHERE id = ?", (json.dumps(items), sync_id))
+            conn.commit()
+            return True
+        return False
+    except Exception as e:
+        print(e)
+        return False
+    finally:
+        conn.close()
     matching_dates_df = pd.read_sql_query(query, conn, params=params)
     
     if matching_dates_df.empty:
@@ -1158,7 +1546,7 @@ def create_company_account(company_name, username, password, email):
             return False, "Company Name already exists. Please login."
 
         # 1. Create Account
-        c.execute("INSERT INTO accounts (id, company_name, subscription_plan) VALUES (?, ?, 'Starter')", (new_acc_id, company_name))
+        c.execute("INSERT INTO accounts (id, company_name, subscription_plan, status) VALUES (?, ?, 'Starter', 'PENDING')", (new_acc_id, company_name))
         account_id = new_acc_id
         
         # 2. Create User (Admin)
@@ -1169,7 +1557,8 @@ def create_company_account(company_name, username, password, email):
                   (new_user_id, account_id, username, email, pwd_hash, 'admin'))
         
         conn.commit()
-        return True, "Account created successfully! Please login."
+        conn.commit()
+        return True, "Account created! ⏳ Request sent to Superadmin for approval."
     except sqlite3.IntegrityError:
         return False, "Duplicate user in this account (Should not happen for new account)."
     except Exception as e:
@@ -1228,6 +1617,9 @@ def verify_user(username, password, company_name_check):
             role, aid, company, status, perms = result[0], result[1], result[2], result[3], result[4]
             
             # STRICT CHECK
+            # STRICT CHECK
+            if status == 'PENDING':
+                return False, "Account pending approval. Please wait for email confirmation."
             if status != 'ACTIVE':
                 return False, "Account is Suspended. Contact Support."
                 
@@ -1540,6 +1932,85 @@ def fetch_floor_status():
     finally:
         conn.close()
 
+def remove_item_from_table(table_id, item_index):
+    """Removes an item from a table's active order by index."""
+    conn = get_connection()
+    c = conn.cursor()
+    try:
+        # Get Current Items
+        c.execute("""
+            SELECT o.items_json, o.id 
+            FROM restaurant_tables t
+            JOIN table_orders o ON t.current_order_id = o.id
+            WHERE t.id = ?
+        """, (table_id,))
+        row = c.fetchone()
+        
+        if row:
+            items_json, order_id = row
+            try:
+                import json
+                items = json.loads(items_json) if items_json else []
+                
+                # Check bounds
+                if 0 <= item_index < len(items):
+                    popped = items.pop(item_index)
+                    
+                    # Update DB
+                    new_json = json.dumps(items)
+                    c.execute("UPDATE table_orders SET items_json = ? WHERE id = ?", (new_json, order_id))
+                    conn.commit()
+                    return True, f"Removed {popped.get('name', 'Item')}"
+                else:
+                    return False, "Item not found."
+            except Exception as e:
+                return False, f"JSON Error: {e}"
+        return False, "Order not active."
+    except Exception as e:
+        return False, str(e)
+    finally:
+        conn.close()
+
+def mark_items_kot_printed(table_id):
+    """Marks all pending items in a table's order as 'sent' (Printed KOT)."""
+    conn = get_connection()
+    c = conn.cursor()
+    try:
+        # Get Current Items
+        c.execute("""
+            SELECT o.items_json, o.id 
+            FROM restaurant_tables t
+            JOIN table_orders o ON t.current_order_id = o.id
+            WHERE t.id = ?
+        """, (table_id,))
+        row = c.fetchone()
+        
+        if row:
+            items_json, order_id = row
+            try:
+                import json
+                items = json.loads(items_json) if items_json else []
+                
+                updated = False
+                for i in items:
+                    if i.get('status') != 'sent':
+                         i['status'] = 'sent'
+                         updated = True
+                
+                if updated:
+                    new_json = json.dumps(items)
+                    c.execute("UPDATE table_orders SET items_json = ? WHERE id = ?", (new_json, order_id))
+                    conn.commit()
+                    return True, "KOT Marked Printed", order_id
+                return True, "No new items", order_id
+            except Exception as e:
+                return False, f"JSON Error: {e}", None
+        return False, "Order not active", None
+    except Exception as e:
+        return False, str(e), None
+    finally:
+        conn.close()
+
 def get_plan_features(plan_name):
     """Returns a list of feature strings for a given plan."""
     conn = get_connection()
@@ -1675,3 +2146,205 @@ def get_churn_metrics(days_threshold=30):
         return pd.DataFrame()
     finally:
         conn.close()
+
+# --- GEO ANALYSIS ---
+def get_geo_revenue():
+    """
+    Returns total revenue grouped by City.
+    Used for GeoViz catchment analysis.
+    """
+    conn = get_connection()
+    aid = get_current_account_id()
+    
+    query = """
+        SELECT c.city, SUM(t.total_amount) as revenue
+        FROM transactions t
+        JOIN customers c ON t.customer_id = c.id
+        WHERE t.account_id = ? AND c.city IS NOT NULL
+        GROUP BY c.city
+        ORDER BY revenue DESC
+    """
+    try:
+        df = pd.read_sql_query(query, conn, params=(aid,))
+        return df
+    except Exception as e:
+        raise e
+    finally:
+        conn.close()
+
+# --- STOCKSWAP NETWORK ---
+
+def get_b2b_deals():
+    """
+    Fetches active B2B deals from the Marketplace Feed.
+    In a real mesh, this would fetch from ALL accounts (with location filter).
+    For now, we fetch all deals EXCEPT the current account's own deals (to buy from others).
+    """
+    conn = get_connection()
+    aid = get_current_account_id()
+    
+    # Logic: Show me deals from OTHER stores
+    query = """
+        SELECT * FROM b2b_deals 
+        WHERE account_id != ? 
+        ORDER BY created_at DESC
+    """
+    try:
+        df = pd.read_sql_query(query, conn, params=(aid,))
+        return df
+    except Exception as e:
+        print(f"StockSwap Fetch Error: {e}")
+        return pd.DataFrame()
+    finally:
+        conn.close()
+
+def create_b2b_deal(store_name, product_name, quantity, price_per_unit, phone):
+    """Broadcasts a new deal to the network."""
+    conn = get_connection()
+    aid = get_current_account_id()
+    new_id = generate_unique_id(16)
+    
+    try:
+        c = conn.cursor()
+        c.execute("""
+            INSERT INTO b2b_deals (id, account_id, store_name, product_name, quantity, price_per_unit, acc_phone)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        """, (new_id, aid, store_name, product_name, quantity, price_per_unit, phone))
+        conn.commit()
+        return True, "Deal Broadcasted."
+    except Exception as e:
+        return False, str(e)
+    finally:
+        conn.close()
+
+# --- CROWDSTOCK (KICKSTARTER) ---
+
+def get_campaigns():
+    """Fetches all active crowd campaigns for the store."""
+    conn = get_connection()
+    aid = get_current_account_id()
+    try:
+        df = pd.read_sql_query("SELECT * FROM crowd_campaigns WHERE account_id = ? ORDER BY created_at DESC", conn, params=(aid,))
+        return df
+    except Exception as e:
+        return pd.DataFrame()
+    finally:
+        conn.close()
+
+def create_campaign(item_name, description, votes_needed, price_est):
+    """Creates a new crowd testing campaign."""
+    conn = get_connection()
+    c = conn.cursor()
+    aid = get_current_account_id()
+    new_id = generate_unique_id(16)
+    
+    try:
+        c.execute("""
+            INSERT INTO crowd_campaigns (id, account_id, item_name, description, votes_needed, price_est)
+            VALUES (?, ?, ?, ?, ?, ?)
+        """, (new_id, aid, item_name, description, votes_needed, price_est))
+        conn.commit()
+        return True, "Campaign Launched."
+    except Exception as e:
+        return False, str(e)
+    finally:
+        conn.close()
+
+def vote_campaign(campaign_id):
+    """Adds a vote to a campaign."""
+    conn = get_connection()
+    c = conn.cursor()
+    try:
+        # Check current status first
+        c.execute("SELECT votes_current, votes_needed, item_name FROM crowd_campaigns WHERE id = ?", (campaign_id,))
+        row = c.fetchone()
+        if not row:
+            return False, "Campaign not found."
+            
+        current, needed, name = row
+        new_votes = current + 1
+        
+        msg = "Vote Recorded!"
+        if new_votes >= needed:
+            msg = f"🎉 '{name}' is FULLY FUNDED! Time to order stock."
+            c.execute("UPDATE crowd_campaigns SET status = 'FUNDED' WHERE id = ?", (campaign_id,))
+            
+        c.execute("UPDATE crowd_campaigns SET votes_current = ? WHERE id = ?", (new_votes, campaign_id))
+        conn.commit()
+        return True, msg
+    except Exception as e:
+        return False, str(e)
+    finally:
+        conn.close()
+
+# --- APPROVAL WORKFLOW ---
+def get_pending_accounts():
+    conn = get_connection()
+    try:
+        df = pd.read_sql_query("SELECT * FROM accounts WHERE status='PENDING' ORDER BY created_at DESC", conn)
+        return df
+    except:
+        return pd.DataFrame()
+    finally:
+        conn.close()
+
+def approve_account(account_id):
+    conn = get_connection()
+    c = conn.cursor()
+    try:
+        # 1. Update Status
+        c.execute("UPDATE accounts SET status='ACTIVE' WHERE id=?", (account_id,))
+        if c.rowcount == 0:
+            return False, "Account not found"
+            
+        # 2. Get Account & Admin Details for Email
+        c.execute("SELECT company_name, subscription_plan, created_at FROM accounts WHERE id=?", (account_id,))
+        acc_row = c.fetchone()
+        
+        c.execute("SELECT email, username FROM users WHERE account_id=? AND role='admin' LIMIT 1", (account_id,))
+        user_row = c.fetchone()
+        
+        conn.commit()
+        
+        if acc_row and user_row:
+            details = {
+                "company": acc_row[0],
+                "plan": acc_row[1],
+                "date": str(acc_row[2]),
+                "email": user_row[0],
+                "username": user_row[1]
+            }
+            # Send Email
+            send_approval_email(details)
+            return True, "Account Approved & Email Sent!"
+            
+        return True, "Approved, but email details missing."
+        
+    except Exception as e:
+        return False, str(e)
+    finally:
+        conn.close()
+
+def send_approval_email(details):
+    """
+    Mock Email Sender.
+    """
+    print("="*60)
+    print(f"📧 SENDING APPROVAL EMAIL TO: {details['email']}")
+    print(f"Subject: Welcome to VyaparMind - {details['company']} Approved!")
+    print("-" * 60)
+    print(f"Dear {details['username']},")
+    print(f"Your account for '{details['company']}' has been approved.")
+    print(f"Plan: {details['plan']}")
+    print(f"Start Date: {details['date']}")
+    # Mock End Date logic
+    from datetime import datetime, timedelta
+    end_date = (datetime.now() + timedelta(days=365)).strftime("%Y-%m-%d")
+    print(f"End Date: {end_date} (Renews Yearly)")
+    
+    # Get Modules
+    mods = get_plan_features(details['plan'])
+    mod_str = ", ".join(mods) if mods else "Standard Suite"
+    print(f"Subscribed Modules: {mod_str}")
+    print("\nYou can now login at: https://app.vyaparmind.com")
+    print("="*60)

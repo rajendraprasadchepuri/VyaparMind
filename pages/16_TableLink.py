@@ -77,6 +77,31 @@ st.markdown("""
     /* Container Tweaks */
     .block-container { padding-top: 2rem; }
 
+    /* COMPACT LIST TWEAKS - SCOPED TO BORDERED CONTAINERS ONLY */
+    /* This targets the vertical block INSIDE a st.container(border=True) 
+       preventing global layout collapse */
+    [data-testid="stVerticalBlockBorderWrapper"] [data-testid="stVerticalBlock"] {
+        gap: 0.2rem !important;
+    }
+    
+    /* Reduce Button Margins */
+    .stButton button {
+        height: auto;
+        padding-top: 2px !important;
+        padding-bottom: 2px !important;
+        margin-top: 2px !important;
+    }
+    
+    /* Reduce Number Input Height */
+    .stNumberInput input {
+        height: auto;
+        padding-top: 2px !important;
+        padding-bottom: 2px !important;
+    }
+    div[data-testid="stNumberInputContainer"] {
+        margin-bottom: 0px;
+    }
+    
     /* Metric Cards */
     div[data-testid="stMetric"] {
         background: white;
@@ -127,16 +152,16 @@ st.markdown("""
     }
     .kds-title {
         font-family: 'Inter', sans-serif;
-        font-size: 1.25rem;
+        font-size: 1.5rem; /* Increased from 1.25 */
         font-weight: 700;
         color: #1f2937;
         margin: 0;
     }
     .kds-badge {
         font-family: 'Inter', sans-serif;
-        font-size: 0.85rem;
+        font-size: 1rem; /* Increased from 0.85 */
         font-weight: 600;
-        padding: 4px 10px;
+        padding: 5px 12px;
         border-radius: 20px;
         box-shadow: 0 2px 4px rgba(0,0,0,0.05);
     }
@@ -148,13 +173,13 @@ st.markdown("""
     .kds-body {
         padding: 15px;
         height: 200px;
-        overflow-y: hidden; /* Hide overflow for clean look, or auto if needed */
+        overflow-y: hidden; 
     }
     .kds-item {
         font-family: 'Inter', sans-serif;
-        font-size: 0.95rem;
+        font-size: 1.15rem; /* Increased from 0.95 */
         color: #4b5563;
-        margin-bottom: 6px;
+        margin-bottom: 8px;
         display: flex;
         align-items: center;
     }
@@ -162,10 +187,10 @@ st.markdown("""
         background: #f3f4f6;
         color: #374151;
         font-weight: 700;
-        font-size: 0.8rem;
-        padding: 2px 6px;
+        font-size: 1rem; /* Increased from 0.8 */
+        padding: 3px 8px;
         border-radius: 6px;
-        margin-right: 8px;
+        margin-right: 10px;
     }
 
     /* Footer Section */
@@ -180,98 +205,183 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # Fetch Enriched Data
-floor_data = db.fetch_floor_status()
+# Fetch Enriched Data
+floor_data = db.get_enriched_tables()
+
+# --- HEADER & CONTROLS ---
+col_head, col_view = st.columns([3, 1], vertical_alignment="center")
+col_head.metric("Tables", len(floor_data))
+view_mode = col_view.radio("Layout", ["Grid", "Map (Custom)"], horizontal=True, key="view_mode_radio")
+
+# --- MANAGEMENT TOOLS ---
+with st.expander("🛠️ Table Operations (Merge/Split)", expanded=False):
+    t_opts = {t['label']: t['id'] for t in floor_data}
+    
+    c_mgr1, c_mgr2 = st.columns(2)
+    with c_mgr1:
+        st.caption("Merge Tables")
+        to_merge = st.multiselect("Select Tables to Join", options=list(t_opts.keys()))
+        if st.button("🔗 Merge Selected"):
+            if len(to_merge) > 1:
+                parent = to_merge[0]
+                children = to_merge[1:]
+                # Logic: Parent is first.
+                parent_id = t_opts[parent]
+                child_ids = [t_opts[c] for c in children]
+                db.merge_tables(parent_id, child_ids)
+                st.toast(f"Merged {', '.join(children)} into {parent}")
+                st.rerun()
+            else:
+                st.error("Select at least 2 tables")
+                
+    with c_mgr2:
+        st.caption("Unmerge")
+        merged_tables = [t for t in floor_data if t['merged_with']]
+        # Actually unmerge target is usually the CHILD or PARENT?
+        # Let's simple unmerge by selecting an Table ID that is a parent or child.
+        # Allow selecting ANY table to unmerge relation
+        curr_merged_labels = [t['label'] for t in floor_data if t['merged_with']]
+        unmerge_tgt = st.selectbox("Select Table to Detach", [""] + curr_merged_labels)
+        if st.button("🔓 Unmerge"):
+            if unmerge_tgt:
+                tid = t_opts[unmerge_tgt]
+                db.unmerge_table(tid)
+                st.rerun()
+
+st.write("") 
+
+# --- RENDER LOGIC ---
+
+if view_mode == "Grid":
+    # Default Grid Logic
+    cols = st.columns(4) 
+    # Determine iteration order
+    display_tables = floor_data
+else:
+    # Map Logic (6x6 Grid)
+    # Create slots
+    slots = {} # (x,y) -> table
+    for t in floor_data:
+        slots[(t['pos_x'], t['pos_y'])] = t
+        
+    display_tables = [] # Not used directly in grid loop but we construct grid
+    st.caption("ℹ️ **Map Mode**: Shows a 6x6 floor plan. Use **Manage -> Update Pos** on a table to place it at a specific (Row, Col). Empty slots show their coordinates.")
 
 # Metrics
-occupied = sum(1 for t in floor_data if t['status'] == 'Occupied')
-available = len(floor_data) - occupied
-m1, m2, m3 = st.columns(3)
-m1.metric("Available", available)
-m2.metric("Occupied", occupied)
+occupied = sum(1 for t in floor_data if t['status'] != 'Available')
+# available = ... 
 
-st.write("") # Spacer
+# Grid Renderer Wrapper
+def render_card(t_data):
+    if not t_data: return "" # Empty slot
+    
+    is_occ = t_data['status'] != 'Available'
+    status = t_data['status']
+    
+    # Styles
+    card_class = "bg-free"
+    badge_class = "badge-green"
+    badge_text = "Free"
+    
+    if status == 'Occupied':
+        card_class = "bg-occupied"
+        badge_class = "badge-red"
+        badge_text = "Occupied"
+    elif status == 'Reserved':
+        card_class = "bg-warning" # Or Blue?
+        badge_class = "badge-orange" # Use existing classes
+        badge_text = "Reserved"
+    elif status == 'Bill Requested':
+        card_class = "bg-warning"
+        badge_class = "badge-orange"
+        badge_text = "Bill Req."
+        
+    # Time Logic
+    if is_occ and t_data['start_time']:
+        try:
+            start = pd.to_datetime(t_data['start_time'])
+            now = datetime.utcnow()
+            diff = now - start
+            mins = int(diff.total_seconds() / 60)
+            badge_text += f" ({mins}m)"
+        except: pass
 
-# Grid Layout
-cols = st.columns(4) # 4 Tables per row
+    waiter = t_data['waiter_id'] or ""
+    waiter_html = f"<div style='font-size:0.8rem; color:#666;'>👤 {waiter}</div>" if waiter else ""
+    
+    # Merged Logic
+    if t_data['merged_with']:
+        # Point to parent
+        card_class = "bg-occupied" # gray?
+        return f"""<div class="kds-card" style="background:#f3f4f6; opacity:0.8;">
+             <div class="kds-header"><div class="kds-title">{t_data['label']}</div></div>
+             <div class="kds-body" style="height:100px; display:flex; align-items:center; justify-content:center;">
+                 Merged 🔗
+             </div>
+        </div>"""
 
-for idx, t_data in enumerate(floor_data):
-    col_idx = idx % 4
-    with cols[col_idx]:
-        is_occ = t_data['status'] == 'Occupied'
-        
-        # Determine Styles
-        card_class = "bg-free"
-        badge_class = "badge-green"
-        badge_text = "Free"
-        
-        time_str = ""
-        mins = 0
-        if is_occ:
-            card_class = "bg-occupied"
-            badge_class = "badge-red"
-            
-            if t_data['start_time']:
-                try:
-                    start = pd.to_datetime(t_data['start_time'])
-                    now = datetime.now()
-                    diff = now - start
-                    mins = int(diff.total_seconds() / 60)
-                    time_str = f"{mins}m"
-                    badge_text = f"⏱️ {time_str}"
-                    
-                    if mins > 20: 
-                        card_class = "bg-warning"
-                        badge_class = "badge-orange"
-                    if mins > 45:
-                        card_class = "bg-occupied" # Back to red for urgency
-                        badge_class = "badge-red"
-                except:
-                    badge_text = "Active"
-        
-        # HTML CARD
-        html_content = f"""<div class="kds-card {card_class}">
-    <div class="kds-header">
-        <div class="kds-title">{t_data['label']}</div>
-        <div class="kds-badge {badge_class}">{badge_text}</div>
-    </div>
-    <div class="kds-body">"""
-        
-        # Items Logic
-        if is_occ:
-            items = t_data.get('items', [])
-            if items:
-                for i in items[:4]: # Show top 4
-                    html_content += f"""<div class="kds-item">
-    <span class="kds-qty">{i['qty']}</span> {i['name']}
-</div>"""
-                if len(items) > 4:
-                    html_content += f"<div class='kds-item' style='color:#9ca3af;'>+ {len(items)-4} more...</div>"
-            else:
-                html_content += "<div class='kds-item' style='color:#9ca3af; font-style:italic;'>No items yet</div>"
-        else:
-            html_content += f"""<div style="text-align:center; padding-top:20px; color:#22c55e;">
-    <div style="font-size:2rem; margin-bottom:5px;">🍽️</div>
-    <div style="font-size:0.9rem; font-weight:600;">{t_data['capacity']} Seats</div>
-</div>"""
-            
-        html_content += """</div>
-</div>"""
-        
-        st.markdown(html_content, unsafe_allow_html=True)
-        
-        # BUTTONS (Native Streamlit Buttons outside HTML)
-        # We overlay them visually or just place below because Streamlit can't embed buttons in HTML
-        if is_occ:
-            if st.button(f"Manage Order", key=f"mng_{t_data['id']}", type="primary", use_container_width=True):
-                st.session_state['selected_table'] = t_data['id']
-                st.session_state['selected_table_label'] = t_data['label']
-                st.rerun()
-        else:
-            if st.button(f"Seat Guests", key=f"seat_{t_data['id']}", use_container_width=True):
-                db.occupy_table(t_data['id'])
-                st.rerun()
-        
-        st.write("") # Margin bottom
+    # HTML CARD
+    # Use one line or textwrap to avoid indentation issues
+    html_content = f"""<div class="kds-card {card_class}"><div class="kds-header"><div class="kds-title">{t_data['label']}</div><div class="kds-badge {badge_class}">{badge_text}</div></div>{waiter_html}<div class="kds-body">"""
+    
+    items = t_data.get('items', [])
+    if items:
+        for i in items[:3]:
+             html_content += f"""<div class="kds-item"><span class="kds-qty">{i['qty']}</span> {i['name']}</div>"""
+        if len(items) > 3:
+             html_content += f"<div class='kds-item'>+ {len(items)-3} more...</div>"
+    elif is_occ:
+         html_content += "<div style='color:#ccc; font-size:1.1rem;'>Taking Order...</div>"
+    else:
+         # Increased Icon and Text Size
+         html_content += f"<div style='text-align:center; padding-top:20px; color:#22c55e;'><div style='font-size:3.5rem; margin-bottom:10px;'>🍽️</div><div style='font-size:1.2rem; font-weight:600;'>{t_data['capacity']} Seats</div></div>"
+         
+    html_content += "</div></div>"
+    return html_content
+
+# RENDER LOOP
+if view_mode == "Grid":
+    cols = st.columns(4)
+    for idx, t in enumerate(floor_data):
+        with cols[idx % 4]:
+            st.markdown(render_card(t), unsafe_allow_html=True)
+            # Action Button
+            if t['status'] != 'Available' and not t['merged_with']:
+                if st.button("Manage", key=f"btn_{t['id']}", use_container_width=True, type="primary"):
+                    st.session_state['selected_table'] = t['id']
+                    st.session_state['selected_table_label'] = t['label']
+                    st.rerun()
+            elif not t['merged_with']:
+                if st.button("Seat Guests", key=f"seat_{t['id']}", use_container_width=True):
+                    db.occupy_table(t['id'])
+                    st.rerun()
+else:
+    # Map Mode (6x6)
+    for r in range(6):
+        mcols = st.columns(6)
+        for c in range(6):
+            target = slots.get((c, r)) # x=col, y=row
+            with mcols[c]:
+                if target:
+                    st.markdown(render_card(target), unsafe_allow_html=True)
+                    if not target['merged_with']:
+                         if target['status'] != 'Available':
+                             if st.button("Manage", key=f"mbtn_{target['id']}", use_container_width=True):
+                                 st.session_state['selected_table'] = target['id']
+                                 st.session_state['selected_table_label'] = target['label']
+                                 st.rerun()
+                         else:
+                             if st.button("Seat", key=f"mseat_{target['id']}", use_container_width=True):
+                                 db.occupy_table(target['id'])
+                                 st.rerun()
+                else:
+                    # Empty Slot with Coordinate Label for guidance
+                    st.markdown(f"<div style='height:150px; border:1px dashed #e5e7eb; border-radius:8px; display:flex; align-items:center; justify-content:center; color:#e5e7eb; font-size:0.8rem;'>{r},{c}</div>", unsafe_allow_html=True)
+
+# End of Grid Logic - Skip original loop
+
+
+
 
 # --- RECEIPT DIALOG ---
 import textwrap
@@ -413,6 +523,42 @@ if 'selected_table' in st.session_state:
     
     st.markdown(f"## 📝 Order Details: Table {t_lbl}")
     
+    # --- TABLE ACTIONS (Status, Transfer, Layout) ---
+    with st.expander("⚙️ Table Actions (Transfer / Status / Layout)", expanded=False):
+        c_a1, c_a2, c_a3 = st.columns(3)
+        
+        with c_a1:
+            st.caption("Update Status")
+            # Occupied is implicit if viewing this, but allow overriding to special states
+            if st.button("Mark Bill Requested", use_container_width=True):
+                db.update_table_status(t_id, "Bill Requested")
+                st.toast("Table marked as Bill Requested")
+                st.rerun()
+            if st.button("Mark Reserved", use_container_width=True):
+                 db.update_table_status(t_id, "Reserved")
+                 st.toast("Table marked as Reserved")
+                 st.rerun()
+
+        with c_a2:
+            st.caption("Transfer Table")
+            new_waiter = st.text_input("New Waiter Name", key=f"waiter_{t_id}")
+            if st.button("Transfer"):
+                if new_waiter:
+                    db.transfer_table(t_id, new_waiter)
+                    st.success(f"Transferred to {new_waiter}")
+                    st.rerun()
+        
+        with c_a3:
+            st.caption("Edit Map Position")
+            # Fetch current pos (need new query or pass in? passing in session state is hard)
+            # Just show inputs, default 0
+            cx = st.number_input("Grid Row (Y)", 0, 5, 0, key=f"py_{t_id}")
+            cy = st.number_input("Grid Col (X)", 0, 5, 0, key=f"px_{t_id}")
+            if st.button("Update Pos"):
+                db.update_table_position(t_id, cy, cx) # X, Y
+                st.toast(f"Moved to ({cy}, {cx})")
+                st.rerun()
+
     # --- CUSTOMER DETAILS (ADDED) ---
     active_customer = None
     points_to_redeem = 0
@@ -456,44 +602,153 @@ if 'selected_table' in st.session_state:
         else:
              inv = inv.head(5) # Show top 5 default
              
-        for _, prod in inv.iterrows():
-             cc1, cc2, cc3 = st.columns([3, 1, 1])
-             cc1.write(f"**{prod['name']}** (₹{prod['price']})")
-             qty = cc2.number_input("Q", 1, 10, 1, key=f"q_{prod['id']}_t", label_visibility="collapsed")
-             if cc3.button("Add", key=f"add_{prod['id']}_t"):
-                 item_data = {
-                     "id": prod['id'],
-                     "name": prod['name'],
-                     "qty": qty,
-                     "price": prod['price'],
-                     "cost": prod['cost_price'],
-                     "total": prod['price'] * qty
-                 }
-                 db.add_item_to_table(t_id, item_data)
-                 st.toast(f"Added {prod['name']}")
-                 st.rerun()
+        # Add Items Container with Border
+        with st.container(border=True):
+            for _, prod in inv.iterrows():
+                 # Balanced Row: More space for Qty (2.0), less spacer (0.3)
+                 # [Name (4), Qty (2), Add (1.2), Spacer (0.3)] - Total ~7.5
+                 cc1, cc2, cc3, _ = st.columns([4, 2, 1.2, 0.3], vertical_alignment="center")
+                 
+                 with cc1:
+                     st.write(f"**{prod['name']}** (₹{prod['price']:.0f})")
+                 
+                 with cc2:
+                     qty = st.number_input("Q", 1, 10, 1, key=f"q_{prod['id']}_t", label_visibility="collapsed")
+                 
+                 with cc3:
+                     if st.button("Add", key=f"add_{prod['id']}_t", type="primary"):
+                         item_data = {
+                             "id": prod['id'],
+                             "name": prod['name'],
+                             "qty": qty,
+                             "price": prod['price'],
+                             "cost": prod['cost_price'],
+                             "category": prod['category'],
+                             "section": db._get_kot_section(prod['category']),
+                             # Add Status for KOT
+                             "status": "pending", 
+                             "total": prod['price'] * qty
+                         }
+                         db.add_item_to_table(t_id, item_data)
+                         st.toast(f"Added {prod['name']}")
+                         st.rerun()
     
+        st.write("") # Spacer
+        if st.button("Close View", use_container_width=True):
+            del st.session_state['selected_table']
+            st.rerun()
+
     with c_bill:
         st.subheader("Current Bill")
         if items:
             total_bill = 0
-            for i in items:
-                st.write(f"{i['name']} x {i['qty']} = ₹{i['total']:.2f}")
-                total_bill += i['total']
+            
+            # TABLE BORDER LAYOUT
+            with st.container(border=True):
+                # Header
+                h1, h2, h3, h4 = st.columns([3, 1, 1.5, 0.5])
+                h1.markdown("**Item**")
+                h2.markdown("**Qty**")
+                h3.markdown("**Price**")
+                h4.write("")
+                st.divider()
+                
+                for idx, i in enumerate(items):
+                    c1, c2, c3, c4 = st.columns([3, 1, 1.5, 0.5], vertical_alignment="center")
+                    
+                    # Determine Status Icon and Section Badge
+                    status = i.get('status', 'pending')
+                    section = i.get('section', 'Kitchen')
+                    
+                    # Status Icons
+                    s_icon = "🔴" # Pending
+                    if status == 'ordered': s_icon = "👨‍🍳"
+                    elif status == 'preparing': s_icon = "🍳"
+                    elif status == 'ready': s_icon = "✅"
+                    elif status == 'cancelled': s_icon = "❌"
+                    
+                    # Section Badge
+                    sec_emoji = "🍲" if section == "Kitchen" else "🍷" if section == "Bar" else "🍰"
+                    
+                    with c1:
+                        st.write(f"{s_icon} {i['name']}")
+                        st.caption(f"{sec_emoji} {section}")
+                    with c2:
+                        st.write(f"x{i['qty']}")
+                    with c3:
+                        st.write(f"₹{i['total']:.0f}")
+                    with c4:
+                        if status == 'pending':
+                            if st.button("🗑️", key=f"rem_{t_id}_{idx}", help="Remove", type="tertiary"):
+                                db.remove_item_from_table(t_id, idx)
+                                st.rerun()
+                        elif status != 'cancelled':
+                            if st.button("❌", key=f"can_{t_id}_{idx}", help="Cancel KOT", type="tertiary"):
+                                db.cancel_table_item(t_id, idx)
+                                st.rerun()
+                    total_bill += i['total'] if status != 'cancelled' else 0
+            
+            # KOT CONTROLS
+            # Only show if there are pending items? Or always allow sending notes?
+            # User wants "Special instructions"
+            c_k1, c_k2 = st.columns([2, 1], vertical_alignment="bottom")
+            kot_note = c_k1.text_input("Kitchen Note (e.g. Spicy)", key=f"kn_{t_id}", placeholder="msg for chef...")
+            
+            if c_k2.button("👨‍🍳 Send KOT", use_container_width=True):
+                # 1. Filter Pending Items
+                pending_items = [x for x in items if x.get('status', 'pending') == 'pending']
+                
+                if not pending_items:
+                    st.warning("No new items to send!")
+                else:
+                    # 2. Mark as Printed in DB
+                    success, msg, order_id = db.mark_items_kot_printed(t_id)
+                    
+                    if success:
+                        # 3. Show Dialog
+                        # We pass the user-friendly table Label + Order ID
+                        c_user = st.session_state.get('username', 'Staff')
+                        ui.show_kot_dialog(pending_items, t_lbl, c_user, kot_note, order_id)
+            
+            # REPRINT KOT
+            if st.button("🔄 Reprint Previous KOT", key=f"rep_{t_id}", use_container_width=True):
+                history = db.get_table_kot_history(t_id)
+                if history:
+                    c_user = st.session_state.get('username', 'Staff')
+                    ui.show_kot_dialog(history, t_lbl, c_user, "REPRINT", order_id or "N/A")
+                else:
+                    st.info("No sent items to reprint.")
+
+            st.markdown("<hr style='margin: 5px 0; border-top: 1px dashed #ccc;'>", unsafe_allow_html=True)
+            
+            # --- TAX CALCULATION (5% GST for Food) ---
+            # Standard GST for restaurants is often 5%
+            tax_rate = 0.05
+            tax_amt = total_bill * tax_rate
+            grand_total = total_bill + tax_amt
+            
+            # Display Breakdown
+            c_t1, c_t2 = st.columns([4, 1])
+            c_t1.write("Subtotal")
+            c_t2.write(f"₹{total_bill:.2f}")
+            
+            c_t1.write("GST (5%)")
+            c_t2.write(f"₹{tax_amt:.2f}")
             
             st.divider()
-            st.write(f"#### Total: ₹{total_bill:.2f}")
+            st.markdown(f"#### Grand Total: ₹{grand_total:.2f}")
             
             # Loyalty Redemption
+            points_to_redeem = 0
             if active_customer and active_customer['loyalty_points'] >= 1000:
                  st.info(f"Loyalty Points Available: {active_customer['loyalty_points']}")
-                 max_red = min(active_customer['loyalty_points'], int(total_bill))
+                 max_red = min(active_customer['loyalty_points'], int(grand_total))
                  use_pts = st.checkbox("Redeem Points?", key=f"use_pts_{t_id}")
                  if use_pts:
                      points_to_redeem = st.number_input("Points", 0, max_red, 0, step=10, key=f"redeem_{t_id}")
                      st.write(f"**Redeeming: -₹{points_to_redeem}**")
             
-            payable = total_bill - points_to_redeem
+            payable = grand_total - points_to_redeem
             if points_to_redeem > 0:
                 st.markdown(f"### Net Payable: ₹{payable:.2f}")
 
@@ -505,15 +760,15 @@ if 'selected_table' in st.session_state:
 
             if c_p1.button("🖨️ Print Bill", use_container_width=True):
                  # Use Shared Dialog
-                 tax_amt = total_bill * 0.05
-                 subtotal = total_bill - tax_amt
+                 # Tax already calculated above
+                 subtotal = total_bill
                  
                  # Add Customer Info to Receipt
                  c_info = f"Table: {t_lbl}"
                  if active_customer:
                      c_info += f" | {active_customer['name']}"
 
-                 ui.show_receipt_dialog(items, payable, total_bill, tax_amt, customer_info=c_info, points_redeemed=points_to_redeem)
+                 ui.show_receipt_dialog(items, payable, subtotal, tax_amt, customer_info=c_info, points_redeemed=points_to_redeem)
             
             if c_p2.button("✅ Pay & Close", type="primary", use_container_width=True):
                 # 1. Record Transaction using database function
@@ -546,9 +801,7 @@ if 'selected_table' in st.session_state:
                 del st.session_state['selected_table']
                 st.rerun()
 
-    if st.button("Close View"):
-        del st.session_state['selected_table']
-        st.rerun()
+
 
 # --- FEEDBACK LOOP ---
 if 'last_txn_msg' in st.session_state:

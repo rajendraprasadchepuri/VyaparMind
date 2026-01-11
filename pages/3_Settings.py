@@ -2,6 +2,7 @@ import streamlit as st
 import database as db
 import ui_components as ui
 import os
+import pandas as pd
 import time
 
 st.set_page_config(page_title="Settings", layout="wide")
@@ -89,7 +90,7 @@ with tab2:
     
     st.info(f"Current Plan: **{current_plan}**")
     
-    c1, c2, c3 = st.columns(3)
+    c1, c2, c3, c4 = st.columns(4)
     
     with c1:
         st.markdown("### Starter")
@@ -99,6 +100,10 @@ with tab2:
             st.button("Current Plan", disabled=True, key="btn_starter")
         else:
             if st.button("Downgrade to Starter", key="btn_down_starter"):
+                # Save Custom History
+                if current_plan not in ["Starter", "Business", "Enterprise"]:
+                     db.update_setting("previous_custom_plan", current_plan)
+                
                 res, msg = db.update_setting("subscription_plan", "Starter")
                 if res:
                     st.rerun()
@@ -113,6 +118,10 @@ with tab2:
             st.button("Current Plan", disabled=True, key="btn_business")
         else:
             if st.button("Upgrade to Business", key="btn_up_business"):
+                # Save Custom History
+                if current_plan not in ["Starter", "Business", "Enterprise"]:
+                     db.update_setting("previous_custom_plan", current_plan)
+
                 res, msg = db.update_setting("subscription_plan", "Business")
                 if res:
                     st.balloons()
@@ -123,17 +132,123 @@ with tab2:
     with c3:
         st.markdown("### Enterprise")
         st.caption("₹2999 / mo")
-        st.markdown("- **Everything in Business**\n- AI Forecasting (IsoBar)\n- Staff AI (ShiftSmart)\n- Innovations (ShelfSense, etc)")
+        st.markdown("- **Everything in Business**\n- AI Forecasting (IsoBar)\n- Staff AI (ShiftSmart)\n- Innovations (ShelfSense)")
         if current_plan == "Enterprise":
             st.button("Current Plan", disabled=True, key="btn_enterprise")
         else:
             if st.button("Upgrade to Enterprise", type="primary", key="btn_up_enterprise"):
+                # Save Custom History
+                if current_plan not in ["Starter", "Business", "Enterprise"]:
+                     db.update_setting("previous_custom_plan", current_plan)
+
                 res, msg = db.update_setting("subscription_plan", "Enterprise")
                 if res:
                     st.balloons()
                     st.rerun()
                 else:
                     st.error(msg)
+
+    with c4:
+        st.markdown("### 💎 Custom")
+        
+        is_custom = current_plan not in ["Starter", "Business", "Enterprise"]
+        
+        if is_custom:
+            # 1. Try Settings First (Unlock specific overrides)
+            bill_amt = db.get_setting("custom_billing_amt")
+            bill_cycle = db.get_setting("custom_billing_cycle") 
+            cust_modules_str = db.get_setting("custom_modules_list") 
+
+            # 2. Fallback to Plan Definition (DB)
+            if not bill_amt or not cust_modules_str:
+                 try:
+                     # Helper to fetch plan details raw
+                     conn = db.get_connection()
+                     # Fetch Price & Features
+                     plan_row = pd.read_sql_query("SELECT price, features FROM subscription_plans WHERE name = ?", conn, params=(current_plan,))
+                     conn.close()
+                     
+                     if not plan_row.empty:
+                         if not bill_amt:
+                             p_price = plan_row.iloc[0]['price']
+                             bill_amt = f"₹{p_price}"
+                             bill_cycle = "Monthly" # Default for defined plans
+                         
+                         if not cust_modules_str:
+                             feat_raw = plan_row.iloc[0]['features']
+                             if feat_raw:
+                                 # Map feature keys to pretty names if possible, or just use as is
+                                 # The DB has "Inventory,TableLink" -> We should try to map relevant ones or display
+                                 cust_modules_str = feat_raw
+                 except Exception as e:
+                     st.error(f"Error fetching plan details: {e}")
+
+            # Defaults if still nothing
+            bill_amt = bill_amt or "Contact Sales"
+            bill_cycle = bill_cycle or "Yearly"
+            cust_modules_str = cust_modules_str or "All Modules"
+
+            st.caption(f"{bill_amt} / {bill_cycle}")
+            
+            # Formatting modules list
+            if "," in cust_modules_str:
+                mod_list = [m.strip() for m in cust_modules_str.split(',') if m.strip()]
+                # Optional: Map codes to names if needed (e.g. TableLink -> Restaurant Tables)
+                # For now display raw feature names as they are usually readable
+                mod_display = "\n".join([f"- {m}" for m in mod_list])
+            else:
+                mod_display = f"- {cust_modules_str}"
+                
+            st.markdown(f"**Subscribed Modules:**\n{mod_display}")
+            st.markdown("- **Dedicated Support**")
+            
+            st.button("Current Plan", disabled=True, key="btn_custom")
+            st.success("Active ✅")
+        else:
+            # Check if there is a recoverable custom plan
+            prev_custom = db.get_setting("previous_custom_plan")
+            
+            if prev_custom and prev_custom not in ["Starter", "Business", "Enterprise"]:
+                 st.markdown(f"### 💎 {prev_custom}") # Use actual plan name title
+                 # Fetch details for preview
+                 p_bill = "Contact Sales"
+                 p_cycle = "Yearly"
+                 p_mods = "All Modules"
+                 
+                 # Try to fetch details
+                 try:
+                     conn = db.get_connection()
+                     plan_row = pd.read_sql_query("SELECT price, features FROM subscription_plans WHERE name = ?", conn, params=(prev_custom,))
+                     conn.close()
+                     if not plan_row.empty:
+                         p_price = plan_row.iloc[0]['price']
+                         p_bill = f"₹{p_price}"
+                         p_cycle = "Monthly"
+                         p_mods = plan_row.iloc[0]['features'] or p_mods
+                 except:
+                     pass
+                     
+                 st.caption(f"{p_bill} / {p_cycle}")
+                 
+                 # Format Modules
+                 if "," in p_mods:
+                    ml = [m.strip() for m in p_mods.split(',') if m.strip()]
+                    p_disp = "\n".join([f"- {m}" for m in ml])
+                 else:
+                    p_disp = f"- {p_mods}"
+                    
+                 st.markdown(f"**Subscribed Modules:**\n{p_disp}")
+                 
+                 if st.button(f"Switch back to {prev_custom}", key="btn_restore_custom"):
+                      res, msg = db.update_setting("subscription_plan", prev_custom)
+                      if res:
+                          st.rerun()
+                      else:
+                          st.error(msg)
+            else:
+                st.caption("Custom Pricing")
+                st.markdown("- **Tailored Modules**\n- Volume Discounts\n- Dedicated Support\n- API Access")
+                st.button("Contact Sales", key="btn_contact_sales", help="Call +91-9876543210")
 
 with tab3:
     st.subheader("👥 User Access Control (RBAC)")
