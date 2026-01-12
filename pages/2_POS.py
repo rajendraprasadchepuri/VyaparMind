@@ -130,7 +130,7 @@ with st.expander("👤 Customer Details (Optional)", expanded=True):
         if cust is not None:
             # Found
             st.success(f"✅ **{cust['name']}** found! (Points: {cust['loyalty_points']})")
-            selected_customer_id = int(cust['id'])
+            selected_customer_id = cust['id']
         else:
             # Not Found -> Add New
             st.warning("New Customer! Quick Register:")

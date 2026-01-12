@@ -83,7 +83,7 @@ with tab2:
                 
                 submitted = st.form_submit_button("Create PO")
                 if submitted:
-                    success, msg = db.create_purchase_order(int(s_id), exp_date, notes)
+                    success, msg = db.create_purchase_order(s_id, exp_date, notes)
                     if success:
                         st.success("PO Created!")
                         st.rerun()

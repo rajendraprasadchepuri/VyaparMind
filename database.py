@@ -689,9 +689,10 @@ def create_purchase_order(supplier_id, expected_date, notes="", override_account
     conn = get_connection()
     c = conn.cursor()
     aid = override_account_id if override_account_id is not None else get_current_account_id()
+    new_id = generate_unique_id(16)
     try:
-        c.execute(f"INSERT INTO purchase_orders (account_id, supplier_id, order_date, expected_date, notes) VALUES ({PLACEHOLDER}, {PLACEHOLDER}, CURRENT_DATE, {PLACEHOLDER}, {PLACEHOLDER})",
-                  (aid, supplier_id, expected_date, notes))
+        c.execute(f"INSERT INTO purchase_orders (id, account_id, supplier_id, order_date, expected_date, notes) VALUES ({PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER}, CURRENT_DATE, {PLACEHOLDER}, {PLACEHOLDER})",
+                  (new_id, aid, supplier_id, expected_date, notes))
         conn.commit()
         return True, "PO Created."
     except Exception as e:

@@ -112,7 +112,7 @@ with tab2:
             
             if st.form_submit_button("Ingest Batch"):
                 prod_id = products_df[products_df['name'] == selected_name].iloc[0]['id']
-                success, msg = db.add_batch(int(prod_id), batch_code, expiry, int(qty), float(cost))
+                success, msg = db.add_batch(prod_id, batch_code, expiry, int(qty), float(cost))
                 if success:
                     st.success(f"Batch {batch_code} ingested!")
                 else:
