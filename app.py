@@ -561,30 +561,33 @@ else:
     """)
 
     # Quick Stats (Scoped to Account)
-    # Quick Stats (Scoped to Account, Global for Super Admin)
-    try:
-        aid = db.get_current_account_id()
-        role = st.session_state.get('role', 'staff')
-        conn = db.get_connection()
-        
-        if role == 'super_admin':
-             # Global Stats
-             product_count = pd.read_sql_query("SELECT COUNT(*) as count FROM products", conn).iloc[0]['count']
-             transaction_count = pd.read_sql_query("SELECT COUNT(*) as count FROM transactions", conn).iloc[0]['count']
-        else:
-             # Tenant Stats
-             product_count = pd.read_sql_query("SELECT COUNT(*) as count FROM products WHERE account_id = ?", conn, params=(aid,)).iloc[0]['count']
-             transaction_count = pd.read_sql_query("SELECT COUNT(*) as count FROM transactions WHERE account_id = ?", conn, params=(aid,)).iloc[0]['count']
-             
-        conn.close()
+    @st.fragment
+    def render_quick_stats():
+        try:
+            aid = db.get_current_account_id()
+            role = st.session_state.get('role', 'staff')
+            conn = db.get_connection()
+            
+            if role == 'super_admin':
+                 # Global Stats
+                 product_count = pd.read_sql_query("SELECT COUNT(*) as count FROM products", conn).iloc[0]['count']
+                 transaction_count = pd.read_sql_query("SELECT COUNT(*) as count FROM transactions", conn).iloc[0]['count']
+            else:
+                 # Tenant Stats
+                 product_count = pd.read_sql_query("SELECT COUNT(*) as count FROM products WHERE account_id = ?", conn, params=(aid,)).iloc[0]['count']
+                 transaction_count = pd.read_sql_query("SELECT COUNT(*) as count FROM transactions WHERE account_id = ?", conn, params=(aid,)).iloc[0]['count']
+                 
+            conn.close()
 
-        col1, col2, col3 = st.columns(3)
-        col1.metric("Total Products", product_count)
-        col2.metric("Total Transactions", transaction_count)
-        col3.metric("System Status", "Online 🟢")
+            col1, col2, col3 = st.columns(3)
+            col1.metric("Total Products", product_count)
+            col2.metric("Total Transactions", transaction_count)
+            col3.metric("System Status", "Online 🟢")
 
-    except Exception as e:
-        st.error(f"Database Error: {e}")
+        except Exception as e:
+            st.error(f"Database Error: {e}")
+
+    render_quick_stats()
 
     st.divider()
     st.info("👈 Select **Inventory**, **POS**, or **Dashboard** from the sidebar to begin.")

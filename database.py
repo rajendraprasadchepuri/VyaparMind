@@ -212,13 +212,17 @@ def init_db():
     ''')
 
     # --- OPTIMIZATION: INDEXES ---
-    # products(name) for search
+    # Global Account Isolation Indexes
+    c.execute("CREATE INDEX IF NOT EXISTS idx_products_aid ON products(account_id)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_customers_aid ON customers(account_id)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_transactions_aid ON transactions(account_id)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_suppliers_aid ON suppliers(account_id)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_staff_aid ON staff(account_id)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_batches_aid ON product_batches(account_id)")
+    
+    # Search & Join Indexes
     c.execute("CREATE INDEX IF NOT EXISTS idx_products_name ON products(name)")
-    
-    # transactions(timestamp) for reporting
     c.execute("CREATE INDEX IF NOT EXISTS idx_transactions_timestamp ON transactions(timestamp)")
-    
-    # transaction_items(transaction_id) for joins
     c.execute("CREATE INDEX IF NOT EXISTS idx_txn_items_txn_id ON transaction_items(transaction_id)")
 
 
@@ -677,6 +681,7 @@ def add_supplier(name, contact, phone, specialty, override_account_id=None):
     finally:
         conn.close()
 
+@st.cache_data(ttl=300)
 def get_all_suppliers(override_account_id=None):
     conn = get_connection()
     aid = override_account_id if override_account_id is not None else get_current_account_id()
@@ -866,12 +871,12 @@ def create_table_management_tables(conn):
     
     conn.commit()
 
+@st.cache_data(ttl=60)
 def get_tables():
     conn = get_connection()
     c = conn.cursor()
     aid = get_current_account_id()
-    # Ensure tables exist for this account (Multi-tenant seeding logic omitted for brevity, assuming shared or pre-seeded)
-    # For now, just fetch checks
+    # Ensure tables exist for this account
     df = pd.read_sql_query(f"SELECT * FROM restaurant_tables WHERE account_id = {PLACEHOLDER}", conn, params=(aid,))
     conn.close()
     return df
@@ -888,6 +893,9 @@ def occupy_table(table_id):
         # Update Table
         c.execute("UPDATE restaurant_tables SET status = 'Occupied', current_order_id = ? WHERE id = ?", (new_order_id, table_id))
         conn.commit()
+        # Invalidate Cache
+        get_tables.clear()
+        get_enriched_tables.clear()
         return True
     except Exception as e:
         print(e)
@@ -1056,6 +1064,7 @@ def update_table_position(table_id, x, y):
     finally:
         conn.close()
 
+@st.cache_data(ttl=30)
 def get_enriched_tables():
     """Replacment for fetch_floor_status to include new columns"""
     conn = get_connection()
@@ -1433,6 +1442,7 @@ def add_staff(name, role, rate):
     finally:
         conn.close()
 
+@st.cache_data(ttl=300)
 def get_all_staff(override_account_id=None):
     conn = get_connection()
     aid = override_account_id if override_account_id is not None else get_current_account_id()

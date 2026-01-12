@@ -456,31 +456,36 @@ def render_sidebar():
     
     current_page = st.session_state.get("current_page", "")
 
-    # Render Groups
-    for group, pages in PAGES.items():
-        # Super Admin Filter: ONLY show 'System' group
-        if (user_role == 'super_admin' or user_role == 'sales_person') and group != 'System':
-            continue
+    @st.fragment
+    def render_nav_links(user_role, allowed_role, allowed_sub):
+        # Render Groups
+        for group, pages in PAGES.items():
+            # Super Admin Filter: ONLY show 'System' group
+            if (user_role == 'super_admin' or user_role == 'sales_person') and group != 'System':
+                continue
 
-        # Pre-check visibility
-        visible_pages = []
-        for label, file_path in pages.items():
-             # Special Hide for non-super_admin/sales_person
-             if "SuperAdmin" in file_path and user_role not in ["super_admin", "sales_person"]:
-                 continue
-                 
-             is_role = '*' in allowed_role or file_path in allowed_role
-             is_sub = '*' in allowed_sub or file_path in allowed_sub
-             if is_role and is_sub:
-                 visible_pages.append((label, file_path))
-        
-        if visible_pages:
-            st.sidebar.caption(group.upper())
-            for label, file_path in visible_pages:
-                if st.sidebar.button(label, key=f"nav_{file_path}", use_container_width=True):
-                     st.switch_page(f"pages/{file_path}")
-        
-            st.sidebar.markdown("") # Spacer
+            # Pre-check visibility
+            visible_pages = []
+            for label, file_path in pages.items():
+                 # Special Hide for non-super_admin/sales_person
+                 if "SuperAdmin" in file_path and user_role not in ["super_admin", "sales_person"]:
+                     continue
+                     
+                 is_role = '*' in allowed_role or file_path in allowed_role
+                 is_sub = '*' in allowed_sub or file_path in allowed_sub
+                 if is_role and is_sub:
+                     visible_pages.append((label, file_path))
+            
+            if visible_pages:
+                st.caption(group.upper())
+                for label, file_path in visible_pages:
+                    if st.button(label, key=f"nav_{file_path}", use_container_width=True):
+                         st.switch_page(f"pages/{file_path}")
+            
+                st.markdown("") # Spacer
+
+    with st.sidebar:
+        render_nav_links(user_role, allowed_role, allowed_sub)
 
 
 

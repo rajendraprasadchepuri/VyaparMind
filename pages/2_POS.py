@@ -162,60 +162,51 @@ col_products, col_cart = st.columns([3, 2], vertical_alignment="top")
 
 # Left: Product Selection
 with col_products:
-    with st.container(border=True):
-        st.subheader("Select Products")
-        
-        # Reload inventory every time to get fresh stock
-        # OPTIMIZATION: Use server-side search and limit
-        # Get search term from previous run if any (from input key 'pos_search_input' maybe? or just rely on state)
-        
-        # Search Form
-        with st.form("inventory_search_form_pos"):
-            # Align Search Input and Find Button
-            c_s1, c_s2 = st.columns([3, 1], vertical_alignment="bottom")
-            search_term = c_s1.text_input("Search Item", placeholder="Barcode or Name...")
-            submitted = c_s2.form_submit_button("Find", use_container_width=True)
-        
-        # Fetch Optimized Data
-        if search_term:
-            inventory = db.fetch_pos_inventory(search_term=search_term, limit=100)
-        else:
-            # Default: Show Top 10 by Sales (User Request)
-            inventory = db.fetch_pos_inventory(limit=10)
+    @st.fragment
+    def render_product_selection():
+        with st.container(border=True):
+            st.subheader("Select Products")
             
-        if not inventory.empty:
+            # Search Form
+            with st.form("inventory_search_form_pos"):
+                c_s1, c_s2 = st.columns([3, 1], vertical_alignment="bottom")
+                search_term = c_s1.text_input("Search Item", placeholder="Barcode or Name...", key="pos_search_term")
+                submitted = c_s2.form_submit_button("Find", use_container_width=True)
             
-            # Product Grid (using metrics for compact view)
-            for _, row in inventory.iterrows():
-                with st.container(border=True):
-                    # Adjusted columns to fit Quantity Input
-                    c1, c2, c3, c4, c5 = st.columns([3, 2, 2, 2, 2])
-                    with c1:
-                        st.markdown(f"**{row['name']}**")
-                        st.caption(f"{row['category']}")
-                    with c2:
-                        st.markdown(f"**₹{row['price']:.2f}**")
-                    with c3:
+            # Fetch Optimized Data
+            if search_term:
+                inventory = db.fetch_pos_inventory(search_term=search_term, limit=100)
+            else:
+                inventory = db.fetch_pos_inventory(limit=10)
+                
+            if not inventory.empty:
+                for _, row in inventory.iterrows():
+                    with st.container(border=True):
+                        c1, c2, c3, c4, c5 = st.columns([3, 2, 2, 2, 2])
+                        with c1:
+                            st.markdown(f"**{row['name']}**")
+                            st.caption(f"{row['category']}")
+                        with c2:
+                            st.markdown(f"**₹{row['price']:.2f}**")
+                        with c3:
+                            if row['stock_quantity'] > 0:
+                                st.success(f"{row['stock_quantity']} In Stock")
+                            else:
+                                st.error("Out of Stock")
+                        
                         if row['stock_quantity'] > 0:
-                            st.success(f"{row['stock_quantity']} In Stock")
-                        else:
-                            st.error("Out of Stock")
-                    
-                    # New Quantity Input and Add Button
-                    if row['stock_quantity'] > 0:
-                        with c4:
-                            # Max defaulted to 10 or stock, whichever is lower? No, let user decide, but cap at stock.
-                            qty_val = st.number_input("Qty", min_value=1, max_value=row['stock_quantity'], value=1, step=1, key=f"qty_{row['id']}", label_visibility="collapsed")
-                        with c5:
-                             # Align Add button with Input
-                             st.write("") # Spacer if needed, or rely on nice alignment
-                             if st.button("Add", key=f"add_{row['id']}", use_container_width=True):
-                                # Get tax rate, default to 0 if missing
-                                tr = row.get('tax_rate', 0.0)
-                                if pd.isna(tr): tr = 0.0
-                                add_to_cart(row['id'], row['name'], row['price'], row['cost_price'], row['stock_quantity'], qty_val, tr)
-        else:
-            st.info("No products found.")
+                            with c4:
+                                qty_val = st.number_input("Qty", min_value=1, max_value=row['stock_quantity'], value=1, step=1, key=f"qty_{row['id']}", label_visibility="collapsed")
+                            with c5:
+                                if st.button("Add", key=f"add_{row['id']}", use_container_width=True):
+                                    tr = row.get('tax_rate', 0.0)
+                                    if pd.isna(tr): tr = 0.0
+                                    add_to_cart(row['id'], row['name'], row['price'], row['cost_price'], row['stock_quantity'], qty_val, tr)
+                                    # We don't need a full rerun here if cart is also fragmented or if we use toast
+            else:
+                st.info("No products found.")
+    
+    render_product_selection()
 
 
 # Right Column Start
