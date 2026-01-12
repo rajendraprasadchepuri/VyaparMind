@@ -1,6 +1,7 @@
 import sqlite3
 import pandas as pd
 from datetime import datetime
+import os
 import streamlit as st
 import secrets
 import string
@@ -55,9 +56,10 @@ def get_current_account_id():
     Retrieves the logged-in user's Account ID from Session State.
     Returns None if not logged in.
     """
-    if 'account_id' in st.session_state:
+    if hasattr(st, 'session_state') and 'account_id' in st.session_state:
         return st.session_state['account_id']
-    return None
+    # Fallback for scripts/headless mode
+    return config.DEFAULT_ACCOUNT_ID
 
 def init_db():
     """Initializes the database with necessary tables if they don't exist."""
@@ -394,6 +396,9 @@ def init_db():
     # Ensure Restaurant Tables are created/migrated
     create_table_management_tables(conn)
     create_online_integration_tables(conn)
+    
+    # Ensure Cold Storage Tables are created
+    create_cold_storage_tables(conn)
 
     conn.commit()
     conn.close()
@@ -1893,8 +1898,8 @@ def fetch_all_accounts():
     conn.close()
     return df
 
-def create_tenant(company_name, plan="Starter"):
-    """Creates a new tenant account."""
+def create_tenant(company_name, plan="Starter", admin_email=None, admin_mobile=None):
+    """Creates a new tenant account with mandatory contact details."""
     conn = get_connection()
     c = conn.cursor()
     new_id = generate_unique_id(16, numeric_only=True)
@@ -1906,6 +1911,12 @@ def create_tenant(company_name, plan="Starter"):
         c.execute(f"INSERT INTO settings (account_id, key, value) VALUES ({PLACEHOLDER}, 'store_name', {PLACEHOLDER})", (new_id, company_name))
         c.execute(f"INSERT INTO settings (account_id, key, value) VALUES ({PLACEHOLDER}, 'subscription_plan', {PLACEHOLDER})", (new_id, plan))
         
+        # Store Mandatory Contact Details for Alerts
+        if admin_email:
+            c.execute(f"INSERT INTO settings (account_id, key, value) VALUES ({PLACEHOLDER}, 'alert_email', {PLACEHOLDER})", (new_id, admin_email))
+        if admin_mobile:
+             c.execute(f"INSERT INTO settings (account_id, key, value) VALUES ({PLACEHOLDER}, 'alert_phone', {PLACEHOLDER})", (new_id, admin_mobile))
+
         conn.commit()
         return True, f"Tenant Created. ID: {new_id}"
     except Exception as e:
@@ -2428,3 +2439,753 @@ def send_approval_email(details):
     print(f"Subscribed Modules: {mod_str}")
     print("\nYou can now login at: https://app.vyaparmind.com")
     print("="*60)
+
+
+# --- COLD STORAGE MODULE LOGIC ---
+
+def create_cold_storage_tables(conn):
+    """Creates all tables required for cold storage operations."""
+    c = conn.cursor()
+    
+    # 1. Cold Storage Zones (Temperature-controlled areas)
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS cold_zones (
+            id TEXT PRIMARY KEY,
+            account_id TEXT DEFAULT '1111222233334444',
+            zone_name TEXT NOT NULL,
+            zone_type TEXT, -- FROZEN_MINUS_25, FROZEN_MINUS_18, CHILLED, DRY
+            target_temp_min REAL, -- e.g., -25.0
+            target_temp_max REAL, -- e.g., -23.0
+            capacity_pallets INTEGER DEFAULT 0,
+            capacity_cubic_meters REAL DEFAULT 0.0,
+            current_occupancy INTEGER DEFAULT 0,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (account_id) REFERENCES accounts(id)
+        )
+    ''')
+    
+    # 2. Temperature Logs (Hourly temperature recordings)
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS temperature_logs (
+            id TEXT PRIMARY KEY,
+            zone_id TEXT NOT NULL,
+            recorded_temp REAL NOT NULL,
+            recorded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            is_breach INTEGER DEFAULT 0, -- Boolean: 1 if outside range
+            breach_duration_minutes INTEGER DEFAULT 0,
+            corrective_action TEXT,
+            recorded_by TEXT, -- User/Sensor ID
+            FOREIGN KEY (zone_id) REFERENCES cold_zones(id)
+        )
+    ''')
+    
+    # 3. Storage Clients (Company/individuals using cold storage)
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS storage_clients (
+            id TEXT PRIMARY KEY,
+            account_id TEXT DEFAULT '1111222233334444',
+            company_name TEXT NOT NULL,
+            contact_person TEXT,
+            phone TEXT,
+            email TEXT,
+            gst_number TEXT,
+            address TEXT,
+            rate_card_json TEXT, -- JSON: {storage_rate_per_pallet_per_day, handling_in, handling_out, zone_premiums}
+            credit_limit REAL DEFAULT 0.0,
+            credit_days INTEGER DEFAULT 30,
+            status TEXT DEFAULT 'ACTIVE', -- ACTIVE, SUSPENDED, CLOSED
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (account_id) REFERENCES accounts(id)
+        )
+    ''')
+    
+    # 4. Cold Storage Inventory (Client-wise inventory with FEFO)
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS cold_inventory (
+            id TEXT PRIMARY KEY,
+            account_id TEXT DEFAULT '1111222233334444',
+            client_id TEXT NOT NULL,
+            commodity_name TEXT NOT NULL,
+            commodity_category TEXT, -- FROZEN_VEG, FROZEN_NONVEG, DAIRY, PHARMA, etc.
+            lot_number TEXT NOT NULL,
+            quantity REAL NOT NULL,
+            unit TEXT DEFAULT 'KG', -- KG, PALLETS, BOXES, CRATES
+            zone_id TEXT,
+            rack_number TEXT,
+            bin_number TEXT,
+            inward_date DATE NOT NULL,
+            expiry_date DATE,
+            inward_grn_id TEXT, -- Link to GRN
+            current_storage_days INTEGER DEFAULT 0,
+            status TEXT DEFAULT 'IN_STOCK', -- IN_STOCK, DISPATCHED, EXPIRED, DAMAGED
+            notes TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (client_id) REFERENCES storage_clients(id),
+            FOREIGN KEY (zone_id) REFERENCES cold_zones(id),
+            FOREIGN KEY (account_id) REFERENCES accounts(id)
+        )
+    ''')
+    
+    # 5. Inward Receipts / GRN (Goods Receipt Notes)
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS inward_receipts (
+            id TEXT PRIMARY KEY,
+            account_id TEXT DEFAULT '1111222233334444',
+            grn_number TEXT UNIQUE NOT NULL,
+            client_id TEXT NOT NULL,
+            vehicle_number TEXT,
+            driver_name TEXT,
+            driver_phone TEXT,
+            arrival_date DATE NOT NULL,
+            arrival_time TEXT,
+            total_quantity REAL,
+            total_pallets INTEGER,
+            quality_check_json TEXT, -- JSON: {temp_on_arrival, packaging_condition, documents_verified, photos}
+            quality_status TEXT DEFAULT 'PENDING', -- PENDING, APPROVED, REJECTED
+            approved_by TEXT,
+            approved_at TIMESTAMP,
+            notes TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (client_id) REFERENCES storage_clients(id),
+            FOREIGN KEY (account_id) REFERENCES accounts(id)
+        )
+    ''')
+    
+    # 6. Inward Items (Line items for each GRN)
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS inward_items (
+            id TEXT PRIMARY KEY,
+            grn_id TEXT NOT NULL,
+            commodity_name TEXT NOT NULL,
+            lot_number TEXT NOT NULL,
+            quantity REAL NOT NULL,
+            unit TEXT DEFAULT 'KG',
+            temp_on_arrival REAL, -- Temperature when goods arrived
+            quality_remarks TEXT,
+            assigned_zone_id TEXT,
+            assigned_rack TEXT,
+            assigned_bin TEXT,
+            inventory_id TEXT, -- Link to created inventory record
+            FOREIGN KEY (grn_id) REFERENCES inward_receipts(id),
+            FOREIGN KEY (assigned_zone_id) REFERENCES cold_zones(id)
+        )
+    ''')
+    
+    # 7. Outward Deliveries (Dispatch records)
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS outward_deliveries (
+            id TEXT PRIMARY KEY,
+            account_id TEXT DEFAULT '1111222233334444',
+            delivery_number TEXT UNIQUE NOT NULL,
+            client_id TEXT NOT NULL,
+            vehicle_number TEXT,
+            driver_name TEXT,
+            driver_phone TEXT,
+            dispatch_date DATE NOT NULL,
+            dispatch_time TEXT,
+            total_quantity REAL,
+            quality_check_json TEXT, -- JSON: quality checks before dispatch
+            quality_status TEXT DEFAULT 'APPROVED',
+            dispatched_by TEXT,
+            notes TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (client_id) REFERENCES storage_clients(id),
+            FOREIGN KEY (account_id) REFERENCES accounts(id)
+        )
+    ''')
+    
+    # 8. Outward Items (Line items for deliveries)
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS outward_items (
+            id TEXT PRIMARY KEY,
+            delivery_id TEXT NOT NULL,
+            inventory_id TEXT NOT NULL,
+            commodity_name TEXT,
+            lot_number TEXT,
+            quantity REAL NOT NULL,
+            unit TEXT DEFAULT 'KG',
+            quality_remarks TEXT,
+            FOREIGN KEY (delivery_id) REFERENCES outward_deliveries(id),
+            FOREIGN KEY (inventory_id) REFERENCES cold_inventory(id)
+        )
+    ''')
+    
+    # Indexes for Cold Storage Performance
+    c.execute("CREATE INDEX IF NOT EXISTS idx_cold_inventory_client ON cold_inventory(client_id)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_cold_inventory_zone ON cold_inventory(zone_id)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_cold_inventory_expiry ON cold_inventory(expiry_date)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_cold_inventory_lot ON cold_inventory(lot_number)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_temp_logs_zone ON temperature_logs(zone_id)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_temp_logs_breach ON temperature_logs(is_breach)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_inward_client ON inward_receipts(client_id)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_outward_client ON outward_deliveries(client_id)")
+    
+    conn.commit()
+
+
+# Cold Storage Zone Management
+def add_cold_zone(zone_name, zone_type, target_temp_min, target_temp_max, capacity_pallets, capacity_cubic_meters):
+    """Add a new temperature-controlled zone."""
+    conn = get_connection()
+    c = conn.cursor()
+    aid = get_current_account_id()
+    new_id = generate_unique_id(16, prefix='ZONE-')
+    
+    try:
+        c.execute(f'''
+            INSERT INTO cold_zones (id, account_id, zone_name, zone_type, target_temp_min, target_temp_max, 
+                                   capacity_pallets, capacity_cubic_meters)
+            VALUES ({PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER})
+        ''', (new_id, aid, zone_name, zone_type, target_temp_min, target_temp_max, capacity_pallets, capacity_cubic_meters))
+        conn.commit()
+        return True, new_id
+    except Exception as e:
+        return False, str(e)
+    finally:
+        conn.close()
+
+
+def get_all_cold_zones():
+    """Fetch all cold zones for the current account."""
+    conn = get_connection()
+    aid = get_current_account_id()
+    df = pd.read_sql_query(f"SELECT * FROM cold_zones WHERE account_id = {PLACEHOLDER} ORDER BY zone_name", conn, params=(aid,))
+    conn.close()
+    return df
+
+
+def log_temperature(zone_id, recorded_temp, recorded_by="Manual"):
+    """Log temperature for a zone and check for breaches."""
+    conn = get_connection()
+    c = conn.cursor()
+    log_id = generate_unique_id(16, prefix='TEMP-')
+    
+    # Get zone details and ACCOUNT ID to check breach and fetch settings
+    c.execute(f"SELECT id, zone_name, target_temp_min, target_temp_max, account_id FROM cold_zones WHERE id = {PLACEHOLDER}", (zone_id,))
+    zone = c.fetchone()
+    
+    if not zone:
+        conn.close()
+        return False, "Zone not found"
+    
+    zone_id_val, zone_name, target_min, target_max, acc_id = zone
+    is_breach = 1 if (recorded_temp < target_min or recorded_temp > target_max) else 0
+    
+    try:
+        c.execute(f'''
+            INSERT INTO temperature_logs (id, zone_id, recorded_temp, is_breach, recorded_by)
+            VALUES ({PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER})
+        ''', (log_id, zone_id, recorded_temp, is_breach, recorded_by))
+        conn.commit()
+        
+        # 🚨 NEW: Send WhatsApp alert on breach
+        if is_breach:
+            try:
+                # Fetch Manager Phone & Email from Settings
+                c.execute(f"SELECT value FROM settings WHERE account_id={PLACEHOLDER} AND key='alert_phone'", (acc_id,))
+                row = c.fetchone()
+                manager_phone = row[0] if row else '+919876543210'
+
+                c.execute(f"SELECT value FROM settings WHERE account_id={PLACEHOLDER} AND key='alert_email'", (acc_id,))
+                row_email = c.fetchone()
+                alert_email = row_email[0] if row_email else None
+
+                # 1. WhatsApp Alert
+                import whatsapp_utils
+                whatsapp_utils.send_temperature_breach_alert(
+                    zone_name, recorded_temp, target_min, target_max, manager_phone=manager_phone
+                )
+                
+                # 2. Email Alert (If configured)
+                if alert_email:
+                    import email_utils
+                    subject = f"🚨 BREACH: {zone_name} is {recorded_temp}°C"
+                    body = f"""
+                    <h2>Temperature Breach Alert</h2>
+                    <p><b>Zone:</b> {zone_name}</p>
+                    <p><b>Recorded Temp:</b> {recorded_temp}°C</p>
+                    <p><b>Safe Range:</b> {target_min}°C to {target_max}°C</p>
+                    <p>Please take immediate action.</p>
+                    """
+                    email_utils.send_email_report(alert_email, subject, body)
+
+            except Exception as alert_error:
+                # Don't fail the whole operation if alert fails
+                print(f"WhatsApp alert failed: {alert_error}")
+        
+        return True, "Logged" if not is_breach else "BREACH_ALERT"
+    except Exception as e:
+        return False, str(e)
+    finally:
+        conn.close()
+
+
+def get_temperature_breaches(days=7):
+    """Get all temperature breaches in last N days."""
+    conn = get_connection()
+    aid = get_current_account_id()
+    
+    query = f'''
+        SELECT tl.*, cz.zone_name
+        FROM temperature_logs tl
+        JOIN cold_zones cz ON tl.zone_id = cz.id
+        WHERE cz.account_id = {PLACEHOLDER} 
+        AND tl.is_breach = 1
+        AND tl.recorded_at >= date('now', '-{days} days')
+        ORDER BY tl.recorded_at DESC
+    '''
+    df = pd.read_sql_query(query, conn, params=(aid,))
+    conn.close()
+    return df
+
+
+# Storage Client Management
+def add_storage_client(company_name, contact_person, phone, email, gst_number, rate_card):
+    """Add a new storage client with rate card."""
+    conn = get_connection()
+    c = conn.cursor()
+    aid = get_current_account_id()
+    new_id = generate_unique_id(16, prefix='CLI-')
+    
+    # Convert rate_card dict to JSON string
+    import json
+    rate_card_json = json.dumps(rate_card) if isinstance(rate_card, dict) else rate_card
+    
+    try:
+        c.execute(f'''
+            INSERT INTO storage_clients (id, account_id, company_name, contact_person, phone, email, gst_number, rate_card_json)
+            VALUES ({PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER})
+        ''', (new_id, aid, company_name, contact_person, phone, email, gst_number, rate_card_json))
+        conn.commit()
+        return True, new_id
+    except Exception as e:
+        return False, str(e)
+    finally:
+        conn.close()
+
+
+def get_all_storage_clients():
+    """Fetch all storage clients."""
+    conn = get_connection()
+    aid = get_current_account_id()
+    df = pd.read_sql_query(f"SELECT * FROM storage_clients WHERE account_id = {PLACEHOLDER} AND status = 'ACTIVE' ORDER BY company_name", conn, params=(aid,))
+    conn.close()
+    return df
+
+
+def get_client_rate_card(client_id):
+    """Get rate card for a specific client."""
+    conn = get_connection()
+    c = conn.cursor()
+    c.execute(f"SELECT rate_card_json FROM storage_clients WHERE id = {PLACEHOLDER}", (client_id,))
+    result = c.fetchone()
+    conn.close()
+    
+    if result and result[0]:
+        import json
+        return json.loads(result[0])
+    return {}
+
+
+# GRN (Inward) Management
+def create_grn(client_id, vehicle_number, arrival_date, driver_name="", driver_phone=""):
+    """Create a new Goods Receipt Note (GRN)."""
+    conn = get_connection()
+    c = conn.cursor()
+    aid = get_current_account_id()
+    grn_id = generate_unique_id(16, prefix='GRN-')
+    
+    # Generate GRN number (format: GRN/YYYYMMDD/001)
+    from datetime import datetime
+    date_str = datetime.now().strftime('%Y%m%d')
+    c.execute(f"SELECT COUNT(*) FROM inward_receipts WHERE grn_number LIKE 'GRN/{date_str}/%'")
+    count = c.fetchone()[0] + 1
+    grn_number = f"GRN/{date_str}/{count:03d}"
+    
+    try:
+        c.execute(f'''
+            INSERT INTO inward_receipts (id, account_id, grn_number, client_id, vehicle_number, driver_name, driver_phone, arrival_date)
+            VALUES ({PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER})
+        ''', (grn_id, aid, grn_number, client_id, vehicle_number, driver_name, driver_phone, arrival_date))
+        conn.commit()
+        return True, grn_id, grn_number
+    except Exception as e:
+        return False, None, str(e)
+    finally:
+        conn.close()
+
+
+def add_grn_item(grn_id, commodity_name, lot_number, quantity, unit, temp_on_arrival, zone_id, rack, bin_num):
+    """Add item to GRN (legacy function - use add_grn_item_with_inventory for full workflow)."""
+    conn = get_connection()
+    c = conn.cursor()
+    item_id = generate_unique_id(16, prefix='GI-')
+    
+    try:
+        c.execute(f'''
+            INSERT INTO inward_items (id, grn_id, commodity_name, lot_number, quantity, unit, 
+                                     temp_on_arrival, assigned_zone_id, assigned_rack, assigned_bin)
+            VALUES ({PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER})
+        ''', (item_id, grn_id, commodity_name, lot_number, quantity, unit, temp_on_arrival, zone_id, rack, bin_num))
+        conn.commit()
+        return True, item_id
+    except Exception as e:
+        return False, str(e)
+    finally:
+        conn.close()
+
+
+def add_grn_item_with_inventory(grn_id, client_id, commodity_name, lot_number, quantity, unit, 
+                                 temp_on_arrival, zone_id, rack, bin_num, expiry_date, inward_date):
+    """Add item to GRN AND automatically create inventory record (full workflow)."""
+    conn = get_connection()
+    c = conn.cursor()
+    aid = get_current_account_id()
+    
+    item_id = generate_unique_id(16, prefix='GI-')
+    inventory_id = generate_unique_id(16, prefix='INV-')
+    
+    try:
+        # 1. Add GRN item
+        c.execute(f'''
+            INSERT INTO inward_items (id, grn_id, commodity_name, lot_number, quantity, unit, 
+                                     temp_on_arrival, assigned_zone_id, assigned_rack, assigned_bin, inventory_id)
+            VALUES ({PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER}, 
+                    {PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER})
+        ''', (item_id, grn_id, commodity_name, lot_number, quantity, unit, temp_on_arrival, zone_id, rack, bin_num, inventory_id))
+        
+        # 2. Auto-create inventory record
+        c.execute(f'''
+            INSERT INTO cold_inventory (id, account_id, client_id, commodity_name, lot_number, quantity, unit,
+                                       zone_id, rack_number, bin_number, inward_date, expiry_date, inward_grn_id, status)
+            VALUES ({PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER},
+                    {PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER}, 'IN_STOCK')
+        ''', (inventory_id, aid, client_id, commodity_name, lot_number, quantity, unit, 
+              zone_id, rack, bin_num, inward_date, expiry_date, grn_id))
+        
+        # 3. Update zone occupancy (assuming 1 pallet per 500 KG)
+        if unit == 'KG':
+            pallets_used = max(1, int(quantity / 500))
+        elif unit == 'PALLETS':
+            pallets_used = int(quantity)
+        else:
+            pallets_used = 1  # Default for BOXES/CRATES
+        
+        c.execute(f'''
+            UPDATE cold_zones 
+            SET current_occupancy = current_occupancy + {PLACEHOLDER}
+            WHERE id = {PLACEHOLDER}
+        ''', (pallets_used, zone_id))
+        
+        conn.commit()
+        return True, inventory_id
+    except Exception as e:
+        conn.rollback()
+        return False, str(e)
+    finally:
+        conn.close()
+
+
+def get_pending_grns():
+    """Get all pending GRNs (quality check not approved)."""
+    conn = get_connection()
+    aid = get_current_account_id()
+    
+    query = f'''
+        SELECT ir.*, sc.company_name as client_name
+        FROM inward_receipts ir
+        JOIN storage_clients sc ON ir.client_id = sc.id
+        WHERE ir.account_id = {PLACEHOLDER} AND ir.quality_status = 'PENDING'
+        ORDER BY ir.arrival_date DESC
+    '''
+    df = pd.read_sql_query(query, conn, params=(aid,))
+    conn.close()
+    return df
+
+
+# Cold Inventory Management (FEFO)
+def get_cold_inventory_fefo(client_id=None):
+    """Get cold inventory sorted by FEFO (First Expiry First Out)."""
+    conn = get_connection()
+    aid = get_current_account_id()
+    
+    query = f'''
+        SELECT ci.*, cz.zone_name, sc.company_name as client_name,
+               julianday(ci.expiry_date) - julianday('now') as days_to_expiry
+        FROM cold_inventory ci
+        LEFT JOIN cold_zones cz ON ci.zone_id = cz.id
+        LEFT JOIN storage_clients sc ON ci.client_id = sc.id
+        WHERE ci.account_id = {PLACEHOLDER} AND ci.status = 'IN_STOCK'
+    '''
+    params = [aid]
+    
+    if client_id:
+        query += f" AND ci.client_id = {PLACEHOLDER}"
+        params.append(client_id)
+    
+    query += " ORDER BY ci.expiry_date ASC, ci.inward_date ASC"
+    
+    df = pd.read_sql_query(query, conn, params=params)
+    conn.close()
+    return df
+
+
+def get_expiring_inventory(days_threshold=30):
+    """Get inventory expiring within threshold days."""
+    conn = get_connection()
+    aid = get_current_account_id()
+    
+    query = f'''
+        SELECT ci.*, cz.zone_name, sc.company_name as client_name,
+               julianday(ci.expiry_date) - julianday('now') as days_to_expiry
+        FROM cold_inventory ci
+        LEFT JOIN cold_zones cz ON ci.zone_id = cz.id
+        LEFT JOIN storage_clients sc ON ci.client_id = sc.id
+        WHERE ci.account_id = {PLACEHOLDER} 
+        AND ci.status = 'IN_STOCK'
+        AND ci.expiry_date <= date('now', '+{days_threshold} days')
+        ORDER BY ci.expiry_date ASC
+    '''
+    df = pd.read_sql_query(query, conn, params=(aid,))
+    conn.close()
+    return df
+
+
+# Billing Functions
+def calculate_storage_charges(client_id, from_date, to_date):
+    """Calculate storage charges for a client between dates."""
+    conn = get_connection()
+    aid = get_current_account_id()
+    
+    # Get client rate card
+    rate_card = get_client_rate_card(client_id)
+    base_rate = rate_card.get('storage_rate_per_pallet_per_day', 50.0)  # Default ₹50/pallet/day
+    
+    # Get inventory records
+    query = f'''
+        SELECT ci.*, cz.zone_type,
+               julianday({PLACEHOLDER}) - julianday(CASE WHEN ci.inward_date > {PLACEHOLDER} THEN ci.inward_date ELSE {PLACEHOLDER} END) + 1 as billable_days
+        FROM cold_inventory ci
+        LEFT JOIN cold_zones cz ON ci.zone_id = cz.id
+        WHERE ci.client_id = {PLACEHOLDER} AND ci.account_id = {PLACEHOLDER}
+        AND ci.inward_date <= {PLACEHOLDER}
+    '''
+    
+    df = pd.read_sql_query(query, conn, params=(to_date, from_date, from_date, client_id, aid, to_date))
+    conn.close()
+    
+    total_charges = 0
+    line_items = []
+    
+    for _, row in df.iterrows():
+        days = max(1, int(row['billable_days']))
+        # Assume 1 pallet per 500 KG (configurable)
+        pallets = max(1, int(row['quantity'] / 500))
+        
+        # Zone premium (e.g., -25°C costs more than -18°C)
+        zone_premium = 1.0
+        if 'MINUS_25' in str(row['zone_type']):
+            zone_premium = 1.5
+        elif 'MINUS_18' in str(row['zone_type']):
+            zone_premium = 1.2
+        
+        line_charge = pallets * base_rate * days * zone_premium
+        total_charges += line_charge
+        
+        line_items.append({
+            'commodity': row['commodity_name'],
+            'lot': row['lot_number'],
+            'quantity': row['quantity'],
+            'pallets': pallets,
+            'days': days,
+            'rate': base_rate * zone_premium,
+            'amount': line_charge
+        })
+    
+    return total_charges, line_items
+
+
+# Delivery (Outward) Management
+def create_delivery(client_id, vehicle_number, dispatch_date, driver_name="", driver_phone="", notes=""):
+    """Create a new outward delivery."""
+    conn = get_connection()
+    c = conn.cursor()
+    aid = get_current_account_id()
+    delivery_id = generate_unique_id(16, prefix='DEL-')
+    
+    # Generate delivery number (format: DEL/YYYYMMDD/001)
+    from datetime import datetime
+    date_str = datetime.now().strftime('%Y%m%d')
+    c.execute(f"SELECT COUNT(*) FROM outward_deliveries WHERE delivery_number LIKE 'DEL/{date_str}/%'")
+    count = c.fetchone()[0] + 1
+    delivery_number = f"DEL/{date_str}/{count:03d}"
+    
+    try:
+        c.execute(f'''
+            INSERT INTO outward_deliveries (id, account_id, delivery_number, client_id, vehicle_number, 
+                                           driver_name, driver_phone, dispatch_date, notes)
+            VALUES ({PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER})
+        ''', (delivery_id, aid, delivery_number, client_id, vehicle_number, driver_name, driver_phone, dispatch_date, notes))
+        conn.commit()
+        return True, delivery_id, delivery_number
+    except Exception as e:
+        return False, None, str(e)
+    finally:
+        conn.close()
+
+
+def add_delivery_item(delivery_id, inventory_id, quantity_dispatched):
+    """Add item to delivery and update inventory status."""
+    conn = get_connection()
+    c = conn.cursor()
+    delivery_item_id = generate_unique_id(16, prefix='DI-')
+    
+    try:
+        # Get inventory details
+        c.execute(f"SELECT commodity_name, lot_number, unit, quantity, zone_id FROM cold_inventory WHERE id = {PLACEHOLDER}", (inventory_id,))
+        inv = c.fetchone()
+        
+        if not inv:
+            return False, "Inventory not found"
+        
+        commodity_name, lot_number, unit, available_qty, zone_id = inv
+        
+        if quantity_dispatched > available_qty:
+            return False, f"Insufficient quantity. Available: {available_qty}, Requested: {quantity_dispatched}"
+        
+        # 1. Add delivery item
+        c.execute(f'''
+            INSERT INTO outward_items (id, delivery_id, inventory_id, commodity_name, lot_number, quantity, unit)
+            VALUES ({PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER})
+        ''', (delivery_item_id, delivery_id, inventory_id, commodity_name, lot_number, quantity_dispatched, unit))
+        
+        # 2. Update inventory quantity or status
+        new_qty = available_qty - quantity_dispatched
+        
+        if new_qty <= 0:
+            # Fully dispatched - mark as DISPATCHED
+            c.execute(f"UPDATE cold_inventory SET quantity = 0, status = 'DISPATCHED' WHERE id = {PLACEHOLDER}", (inventory_id,))
+        else:
+            # Partial dispatch - reduce quantity
+            c.execute(f"UPDATE cold_inventory SET quantity = {PLACEHOLDER} WHERE id = {PLACEHOLDER}", (new_qty, inventory_id))
+        
+        # 3. Update zone occupancy
+        if unit == 'KG':
+            pallets_freed = max(1, int(quantity_dispatched / 500))
+        elif unit == 'PALLETS':
+            pallets_freed = int(quantity_dispatched)
+        else:
+            pallets_freed = 1
+        
+        c.execute(f'''
+            UPDATE cold_zones 
+            SET current_occupancy = current_occupancy - {PLACEHOLDER}
+            WHERE id = {PLACEHOLDER}
+        ''', (pallets_freed, zone_id))
+        
+        conn.commit()
+        return True, delivery_item_id
+    except Exception as e:
+        conn.rollback()
+        return False, str(e)
+    finally:
+        conn.close()
+
+
+def get_deliveries_history(days=30):
+    """Get delivery history."""
+    conn = get_connection()
+    aid = get_current_account_id()
+    
+    query = f'''
+        SELECT od.*, sc.company_name as client_name
+        FROM outward_deliveries od
+        JOIN storage_clients sc ON od.client_id = sc.id
+        WHERE od.account_id = {PLACEHOLDER}
+        AND od.dispatch_date >= date('now', '-{days} days')
+        ORDER BY od.dispatch_date DESC
+    '''
+    df = pd.read_sql_query(query, conn, params=(aid,))
+    conn.close()
+    return df
+
+
+# Analytics & Insights
+def get_cold_storage_analytics():
+    """FETCH aggregated analytics data for dashboard."""
+    conn = get_connection()
+    c = conn.cursor()
+    aid = get_current_account_id()
+    
+    stats = {}
+    
+    try:
+        # 1. Total Stored Value (Estimated) & Quantity
+        c.execute(f'''
+            SELECT SUM(quantity), COUNT(*) 
+            FROM cold_inventory 
+            WHERE account_id = {PLACEHOLDER} AND status = 'IN_STOCK'
+        ''', (aid,))
+        res = c.fetchone()
+        stats['total_inventory_kg'] = res[0] if res[0] else 0
+        stats['total_lots'] = res[1] if res[1] else 0
+        
+        # 2. Zone Utilization (Current)
+        query_zones = f'''
+            SELECT zone_name, current_occupancy, capacity_pallets as capacity 
+            FROM cold_zones 
+            WHERE account_id = {PLACEHOLDER}
+        '''
+        stats['zone_utilization'] = pd.read_sql_query(query_zones, conn, params=(aid,))
+        
+        # 3. Client Distribution
+        query_clients = f'''
+            SELECT sc.company_name, SUM(ci.quantity) as total_kg
+            FROM cold_inventory ci
+            JOIN storage_clients sc ON ci.client_id = sc.id
+            WHERE ci.account_id = {PLACEHOLDER} AND ci.status = 'IN_STOCK'
+            GROUP BY sc.company_name
+            ORDER BY total_kg DESC
+        '''
+        stats['client_distribution'] = pd.read_sql_query(query_clients, conn, params=(aid,))
+        
+        # 4. Inventory Aging (buckets)
+        # SQLite diff in days: julianday('now') - julianday(inward_date)
+        # Postgres diff: CURRENT_DATE - inward_date
+        db_type = os.getenv('DB_TYPE', 'SQLITE')
+        
+        if db_type == 'POSTGRES':
+            age_expr = "DATE_PART('day', NOW() - inward_date)"
+        else:
+            age_expr = "CAST(julianday('now') - julianday(inward_date) AS INTEGER)"
+            
+        query_aging = f'''
+            SELECT 
+                CASE 
+                    WHEN {age_expr} < 30 THEN '0-30 Days'
+                    WHEN {age_expr} BETWEEN 30 AND 60 THEN '30-60 Days'
+                    WHEN {age_expr} BETWEEN 60 AND 90 THEN '60-90 Days'
+                    ELSE '90+ Days'
+                END as age_bucket,
+                COUNT(*) as lot_count,
+                SUM(quantity) as total_kg
+            FROM cold_inventory
+            WHERE account_id = {PLACEHOLDER} AND status = 'IN_STOCK'
+            GROUP BY age_bucket
+        '''
+        stats['inventory_aging'] = pd.read_sql_query(query_aging, conn, params=(aid,))
+        
+        # 5. Projected Monthly Revenue (Estimated from current stock)
+        # Assuming avg rate if unknown, or fetching from client rate card?
+        # For speed, we'll estimate based on average ₹50/pallet (500kg)
+        # Revenue = (Total KG / 500) * 50 * 30
+        estimated_pallets = stats['total_inventory_kg'] / 500
+        stats['projected_revenue'] = estimated_pallets * 50 * 30
+        
+    except Exception as e:
+        print(f"Analytics Error: {e}")
+        stats['error'] = str(e)
+    finally:
+        conn.close()
+        
+    return stats

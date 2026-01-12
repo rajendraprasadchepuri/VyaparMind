@@ -27,6 +27,15 @@ PAGES = {
         "🧬 ShelfSense": "14_ShelfSense.py",
         "🔮 CrowdStock": "15_CrowdStock.py",
     },
+    "Cold Storage": {
+        "🌡️ ColdZone": "19_ColdZone.py",
+        "📦 ColdVault": "20_ColdVault.py",
+        "🚛 InwardOutward": "21_InwardOutward.py",
+        "💰 ClientLedger": "22_ClientLedger.py",
+        "📋 ComplianceLog": "23_ComplianceLog.py",
+        "📈 ColdInsights": "24_ColdInsights.py",
+        "🔐 Client Portal": "25_ClientPortal.py",
+    },
     "Admin": {
         "⚙️ Settings": "3_Settings.py"
     },
@@ -61,7 +70,14 @@ MODULE_MAP = {
     "CrowdStock": "15_CrowdStock.py",
     "TableLink": "16_TableLink.py",
     "KitchenDisplay": "17_Kitchen_Display_System.py",
-    "OnlineOrdering": "18_Online_Ordering.py"
+    "OnlineOrdering": "18_Online_Ordering.py",
+    "ColdZone": "19_ColdZone.py",
+    "ColdVault": "20_ColdVault.py",
+    "InwardOutward": "21_InwardOutward.py",
+    "ClientLedger": "22_ClientLedger.py",
+    "ComplianceLog": "23_ComplianceLog.py",
+    "ColdInsights": "24_ColdInsights.py",
+    "ClientPortal": "25_ClientPortal.py"
 }
 
 ROLES = {

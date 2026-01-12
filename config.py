@@ -19,4 +19,4 @@ PG_USER = os.getenv("PGUSER", "postgres")
 PG_PASS = os.getenv("PGPASSWORD", "postgres")
 
 # Global Account ID (for Scoped logic)
-DEFAULT_ACCOUNT_ID = "9676260340"
+DEFAULT_ACCOUNT_ID = "O5SQLRP2SQV2KNLM"

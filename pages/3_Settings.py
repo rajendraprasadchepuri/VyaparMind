@@ -21,11 +21,19 @@ with tab1:
     s_addr = db.get_setting("store_address") or "Hyderabad, India"
     s_phone = db.get_setting("store_phone") or "9876543210"
     s_logo = db.get_setting("app_logo") or "Ascending Lotus"
+    s_alert_email = db.get_setting("alert_email") or ""
+    s_alert_phone = db.get_setting("alert_phone") or "+91"
 
     with st.form("settings_form"):
         new_name = st.text_input("Store Name", value=s_name)
         new_addr = st.text_input("Address", value=s_addr)
-        new_phone = st.text_input("Phone", value=s_phone)
+        new_phone = st.text_input("Store Phone (Public)", value=s_phone)
+        
+        st.markdown("### 🚨 Alert Configuration")
+        st.caption("Receive critical breaches and automated reports here.")
+        c_a1, c_a2 = st.columns(2)
+        new_alert_email = c_a1.text_input("Alert Email", value=s_alert_email)
+        new_alert_phone = c_a2.text_input("Alert Mobile (WhatsApp)", value=s_alert_phone)
         
         st.markdown("### Branding")
         # Custom Logo Upload
@@ -37,6 +45,8 @@ with tab1:
             s1, m1 = db.update_setting("store_name", new_name)
             s2, m2 = db.update_setting("store_address", new_addr)
             s3, m3 = db.update_setting("store_phone", new_phone)
+            s4, m4 = db.update_setting("alert_email", new_alert_email)
+            s5, m5 = db.update_setting("alert_phone", new_alert_phone)
             
             # Handle Logo Upload
             logo_success = True
@@ -69,8 +79,9 @@ with tab1:
                 except Exception as e:
                     st.error(f"Failed to save logo file: {e}")
                     logo_success = False
-
-            if s1 and s2 and s3 and logo_success:
+            
+            # Check all results
+            if s1 and s2 and s3 and s4 and s5 and logo_success:
                 st.success("All settings and logo updated successfully!")
                 import time
                 time.sleep(1)
@@ -80,6 +91,8 @@ with tab1:
                 if not s1: errors.append(f"Store Name: {m1}")
                 if not s2: errors.append(f"Address: {m2}")
                 if not s3: errors.append(f"Phone: {m3}")
+                if not s4: errors.append(f"Alert Email: {m4}")
+                if not s5: errors.append(f"Alert Phone: {m5}")
                 if not logo_success: errors.append(f"Logo: {logo_msg}")
                 st.error("Error saving settings:\n" + "\n".join(errors))
 

@@ -77,6 +77,10 @@ with tab_tenants:
         with st.form("add_tenant_form"):
             new_company = st.text_input("Company Name")
             
+            c1, c2 = st.columns(2)
+            new_email = c1.text_input("Admin Email (for Alerts)")
+            new_mobile = c2.text_input("Admin Mobile (+91...)", value="+91")
+            
             # Dynamic Plans
             plans_df = db.get_all_plans()
             if not plans_df.empty:
@@ -87,8 +91,8 @@ with tab_tenants:
             new_plan = st.selectbox("Subscription Plan", plan_options)
             
             if st.form_submit_button("Create Tenant"):
-                if new_company:
-                    success, msg = db.create_tenant(new_company, new_plan)
+                if new_company and new_email and new_mobile and len(new_mobile) > 10:
+                    success, msg = db.create_tenant(new_company, new_plan, admin_email=new_email, admin_mobile=new_mobile)
                     if success:
                         st.success(f"✅ {msg}")
                         time.sleep(1)
@@ -96,7 +100,7 @@ with tab_tenants:
                     else:
                         st.error(f"❌ {msg}")
                 else:
-                    st.error(f"❌ {msg}")
+                    st.error("❌ Company Name, Email and valid Mobile Number are mandatory.")
 
     st.subheader("Active Tenants")
     # 🔍 Search Bar
