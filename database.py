@@ -224,6 +224,16 @@ def init_db():
     c.execute("CREATE INDEX IF NOT EXISTS idx_products_name ON products(name)")
     c.execute("CREATE INDEX IF NOT EXISTS idx_transactions_timestamp ON transactions(timestamp)")
     c.execute("CREATE INDEX IF NOT EXISTS idx_txn_items_txn_id ON transaction_items(transaction_id)")
+    
+    # NEW: Performance-Critical Indexes
+    c.execute("CREATE INDEX IF NOT EXISTS idx_customers_phone ON customers(phone)")  # POS customer lookups
+    c.execute("CREATE INDEX IF NOT EXISTS idx_products_category ON products(category)")  # Category filtering
+    c.execute("CREATE INDEX IF NOT EXISTS idx_txn_items_product_id ON transaction_items(product_id)")  # Product sales aggregation
+    c.execute("CREATE INDEX IF NOT EXISTS idx_batches_product_id ON product_batches(product_id)")  # FreshFlow batch lookups
+    c.execute("CREATE INDEX IF NOT EXISTS idx_purchase_orders_supplier_id ON purchase_orders(supplier_id)")  # Supplier performance
+    c.execute("CREATE INDEX IF NOT EXISTS idx_shifts_staff_id ON shifts(staff_id)")  # Staff shift queries
+    c.execute("CREATE INDEX IF NOT EXISTS idx_b2b_deals_aid ON b2b_deals(account_id)")  # B2B deal filtering
+
 
 
     # 9. Suppliers (VendorTrust)
@@ -470,7 +480,7 @@ def update_product(product_id, price, cost_price, stock_quantity, tax_rate):
         # Invalidate Cache
         _fetch_all_products_impl.clear()
 
-@st.cache_data(ttl=300)
+@st.cache_data(ttl=600)  # Optimized: Products change infrequently
 def _fetch_all_products_impl(account_id):
     """Internal cached fetcher."""
     conn = get_connection()
@@ -497,7 +507,7 @@ def fetch_all_products(search_term=None, override_account_id=None):
     conn.close()
     return df
 
-@st.cache_data(ttl=60)
+@st.cache_data(ttl=120)  # Optimized: Balance freshness with performance
 def _fetch_pos_inventory_impl(account_id):
     conn = get_connection()
     # Left join to include products even with 0 sales
@@ -547,7 +557,7 @@ def fetch_pos_inventory(search_term=None, limit=50, override_account_id=None):
     conn.close()
     return df
 
-@st.cache_data(ttl=300)
+@st.cache_data(ttl=600)  # Optimized: Customer data changes infrequently
 def _fetch_customers_impl(account_id):
     """Internal cached fetcher."""
     conn = get_connection()
@@ -681,7 +691,7 @@ def add_supplier(name, contact, phone, specialty, override_account_id=None):
     finally:
         conn.close()
 
-@st.cache_data(ttl=300)
+@st.cache_data(ttl=600)  # Optimized: Supplier list rarely changes
 def get_all_suppliers(override_account_id=None):
     conn = get_connection()
     aid = override_account_id if override_account_id is not None else get_current_account_id()

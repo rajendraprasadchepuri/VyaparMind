@@ -63,56 +63,57 @@ def render_top_metrics():
     prev_month_num = last_month.month
     prev_year_num = last_month.year
 
-    # --- 1. Top Level Metrics (Optimized) ---
-    # Current Month Metrics
-    q_curr = """
+    # --- 1. Top Level Metrics (Optimized with Combined Query) ---
+    # OPTIMIZATION: Combine current/previous month into single query
+    q_metrics = """
         SELECT 
-            SUM(t.total_amount) as revenue,
-            SUM(t.total_profit) as profit,
-            SUM(ti.quantity) as items_sold,
-            AVG(t.total_amount) as avg_order
+            SUM(CASE WHEN strftime('%m', t.timestamp) = ? AND strftime('%Y', t.timestamp) = ? 
+                THEN t.total_amount ELSE 0 END) as curr_revenue,
+            SUM(CASE WHEN strftime('%m', t.timestamp) = ? AND strftime('%Y', t.timestamp) = ? 
+                THEN t.total_profit ELSE 0 END) as curr_profit,
+            SUM(CASE WHEN strftime('%m', t.timestamp) = ? AND strftime('%Y', t.timestamp) = ? 
+                THEN ti.quantity ELSE 0 END) as curr_items_sold,
+            AVG(CASE WHEN strftime('%m', t.timestamp) = ? AND strftime('%Y', t.timestamp) = ? 
+                THEN t.total_amount END) as curr_avg_order,
+            SUM(CASE WHEN strftime('%m', t.timestamp) = ? AND strftime('%Y', t.timestamp) = ? 
+                THEN t.total_amount ELSE 0 END) as prev_revenue,
+            SUM(CASE WHEN strftime('%m', t.timestamp) = ? AND strftime('%Y', t.timestamp) = ? 
+                THEN t.total_profit ELSE 0 END) as prev_profit,
+            SUM(CASE WHEN strftime('%m', t.timestamp) = ? AND strftime('%Y', t.timestamp) = ? 
+                THEN ti.quantity ELSE 0 END) as prev_items_sold
         FROM transactions t
         LEFT JOIN transaction_items ti ON t.id = ti.transaction_id
-        WHERE t.account_id = ? 
-        AND strftime('%m', t.timestamp) = ? 
-        AND strftime('%Y', t.timestamp) = ?
+        WHERE t.account_id = ?
     """
     # Note: strftime returns '01', '02' etc. Python str(month) might be '1'. Pad it.
     c_m_str = f"{curr_month:02d}"
     c_y_str = str(curr_year)
-
-    curr_df = pd.read_sql_query(q_curr, conn, params=(aid, c_m_str, c_y_str))
-    curr_metrics = curr_df.iloc[0]
-
-    # Previous Month Metrics
-    q_prev = """
-        SELECT 
-            SUM(t.total_amount) as revenue,
-            SUM(t.total_profit) as profit,
-            SUM(ti.quantity) as items_sold
-        FROM transactions t
-        LEFT JOIN transaction_items ti ON t.id = ti.transaction_id
-        WHERE t.account_id = ? 
-        AND strftime('%m', t.timestamp) = ? 
-        AND strftime('%Y', t.timestamp) = ?
-    """
     p_m_str = f"{prev_month_num:02d}"
     p_y_str = str(prev_year_num)
 
-    prev_df = pd.read_sql_query(q_prev, conn, params=(aid, p_m_str, p_y_str))
-    prev_metrics = prev_df.iloc[0]
-
+    # Execute combined query (MUCH faster than 2 separate queries)
+    metrics_df = pd.read_sql_query(q_metrics, conn, params=(
+        c_m_str, c_y_str,  # curr_revenue
+        c_m_str, c_y_str,  # curr_profit
+        c_m_str, c_y_str,  # curr_items_sold
+        c_m_str, c_y_str,  # curr_avg_order
+        p_m_str, p_y_str,  # prev_revenue
+        p_m_str, p_y_str,  # prev_profit
+        p_m_str, p_y_str,  # prev_items_sold
+        aid
+    ))
+    
     conn.close()
 
-    # Prepare Values (Handle None from SQL SUM if 0 records)
-    c_rev = curr_metrics['revenue'] or 0
-    c_prof = curr_metrics['profit'] or 0
-    c_items = curr_metrics['items_sold'] or 0
-    c_avg = curr_metrics['avg_order'] or 0
-
-    p_rev = prev_metrics['revenue'] or 0
-    p_prof = prev_metrics['profit'] or 0
-    p_items = prev_metrics['items_sold'] or 0
+    # Extract metrics from single row
+    metrics = metrics_df.iloc[0]
+    c_rev = metrics['curr_revenue'] or 0
+    c_prof = metrics['curr_profit'] or 0
+    c_items = metrics['curr_items_sold'] or 0
+    c_avg = metrics['curr_avg_order'] or 0
+    p_rev = metrics['prev_revenue'] or 0
+    p_prof = metrics['prev_profit'] or 0
+    p_items = metrics['prev_items_sold'] or 0
 
     # Delta Logic
     def calc_delta(curr, prev):
@@ -126,6 +127,7 @@ def render_top_metrics():
         c2.metric("Net Profit (This Month)", f"₹{c_prof:,.0f}", delta=calc_delta(c_prof, p_prof))
         c3.metric("Items Sold", int(c_items), delta=calc_delta(c_items, p_items))
         c4.metric("Avg Order Value", f"₹{c_avg:,.0f}")
+
 
 render_top_metrics()
 

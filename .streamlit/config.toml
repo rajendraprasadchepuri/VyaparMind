@@ -4,3 +4,17 @@ backgroundColor = "#FFFFFF"
 secondaryBackgroundColor = "#F0F2F6"
 textColor = "#262730"
 font = "sans serif"
+
+# Performance Optimizations
+[runner]
+fastReruns = true  # Faster state updates
+magicEnabled = false  # Disable magic commands for speed
+
+[server]
+headless = true
+enableXsrfProtection = false  # Disable for local dev (re-enable for production)
+enableCORS = false  # Disable for local dev
+maxUploadSize = 200  # MB
+
+[client]
+toolbarMode = "minimal"
