@@ -2886,6 +2886,25 @@ def add_grn_item_with_inventory(grn_id, client_id, commodity_name, lot_number, q
         conn.close()
 
 
+def approve_grn_quality(grn_id, approved_by, notes=""):
+    """Approve quality check for a GRN."""
+    conn = get_connection()
+    c = conn.cursor()
+    try:
+        from datetime import datetime
+        now = datetime.now()
+        c.execute(f'''
+            UPDATE inward_receipts 
+            SET quality_status = 'APPROVED', approved_by = {PLACEHOLDER}, approved_at = {PLACEHOLDER}, notes = {PLACEHOLDER}
+            WHERE id = {PLACEHOLDER}
+        ''', (approved_by, now, notes, grn_id))
+        conn.commit()
+        return True, "Quality Approved Successfully"
+    except Exception as e:
+        return False, str(e)
+    finally:
+        conn.close()
+
 def get_pending_grns():
     """Get all pending GRNs (quality check not approved)."""
     conn = get_connection()

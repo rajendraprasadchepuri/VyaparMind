@@ -3,6 +3,7 @@ import database as db
 import pandas as pd
 from datetime import datetime
 import ui_components as ui
+import time
 
 # --- CONFIGURATION ---
 st.set_page_config(page_title="Inward & Outward - Cold Storage", layout="wide", page_icon="🚛")
@@ -346,6 +347,32 @@ with tab3:
                 hide_index=True,
                 use_container_width=True
             )
+            
+            # --- APPROVAL UI ---
+            st.divider()
+            with st.container(border=True):
+                st.subheader("✅ Action: Quality Approval")
+                c_app1, c_app2 = st.columns([2, 1])
+                
+                # Create options list for selectbox
+                grn_opts = {f"{row['grn_number']} ({row['client_name']})": row['id'] for idx, row in pending_grns.iterrows()}
+                
+                selected_grn_label = c_app1.selectbox("Select GRN to Approve", list(grn_opts.keys()))
+                selected_grn_id = grn_opts[selected_grn_label]
+                
+                app_notes = c_app1.text_area("Quality Check Notes", placeholder="e.g. Verified temp logs, packaging intact.")
+                
+                st.info("By approving, you confirm that physical goods match the GRN entry.")
+                
+                if c_app2.button("✅ Approve Quality", type="primary", use_container_width=True):
+                     current_user = st.session_state.get('username', 'Admin')
+                     succ, msg = db.approve_grn_quality(selected_grn_id, current_user, app_notes)
+                     if succ:
+                         st.success(f"GRN {selected_grn_label} Approved!")
+                         time.sleep(1)
+                         st.rerun()
+                     else:
+                         st.error(msg)
         else:
             st.success("✅ All GRNs are quality-checked and approved!")
     
