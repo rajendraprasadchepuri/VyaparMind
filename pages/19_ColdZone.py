@@ -273,9 +273,14 @@ with tab3:
                 success, result = db.log_temperature(selected_zone_id, recorded_temp, recorded_by)
                 
                 if success:
-                    if result == "BREACH_ALERT":
+                    if result == "BREACH_ALERT_SENT":
                         st.error(f"🚨 TEMPERATURE BREACH DETECTED! {recorded_temp}°C is outside the safe range!")
                         st.warning("Please take corrective action immediately and document it.")
+                        st.toast("Alert Sent to Manager via WhatsApp", icon="✅")
+                    elif result.startswith("BREACH_ALERT_FAILED"):
+                        error_detail = result.split(":", 1)[1] if ":" in result else "Unknown Error"
+                        st.error(f"🚨 TEMPERATURE BREACH DETECTED! {recorded_temp}°C")
+                        st.error(f"⚠️ ALERT FAILED: Could not send WhatsApp. Error: {error_detail}")
                     else:
                         st.success(f"✅ Temperature logged: {recorded_temp}°C for {selected_zone_name}")
                     

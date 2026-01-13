@@ -2684,7 +2684,16 @@ def log_temperature(zone_id, recorded_temp, recorded_by="Manual"):
                 # Fetch Manager Phone & Email from Settings
                 c.execute(f"SELECT value FROM settings WHERE account_id={PLACEHOLDER} AND key='alert_phone'", (acc_id,))
                 row = c.fetchone()
-                manager_phone = row[0] if row else '+919876543210'
+                
+                # FALLBACK LOGIC: DB Setting -> Env Var -> Default Placeholder
+                # Treat empty string or just country code as "not set"
+                db_phone = row[0] if row else None
+                if not db_phone or len(db_phone.strip()) <= 3: # e.g. "+91" or ""
+                    manager_phone = os.getenv('MANAGER_PHONE', '+919876543210')
+                else:
+                    manager_phone = db_phone
+                
+                print(f"🔔 Sending WhatsApp alert to: {manager_phone}")
 
                 c.execute(f"SELECT value FROM settings WHERE account_id={PLACEHOLDER} AND key='alert_email'", (acc_id,))
                 row_email = c.fetchone()
@@ -2692,10 +2701,13 @@ def log_temperature(zone_id, recorded_temp, recorded_by="Manual"):
 
                 # 1. WhatsApp Alert
                 import whatsapp_utils
-                whatsapp_utils.send_temperature_breach_alert(
+                success, msg_id = whatsapp_utils.send_temperature_breach_alert(
                     zone_name, recorded_temp, target_min, target_max, manager_phone=manager_phone
                 )
                 
+                if not success:
+                    raise Exception(f"WhatsApp API Error: {msg_id}")
+
                 # 2. Email Alert (If configured)
                 if alert_email:
                     import email_utils
@@ -2710,10 +2722,11 @@ def log_temperature(zone_id, recorded_temp, recorded_by="Manual"):
                     email_utils.send_email_report(alert_email, subject, body)
 
             except Exception as alert_error:
-                # Don't fail the whole operation if alert fails
+                # Don't fail the whole operation if alert fails, but report it
                 print(f"WhatsApp alert failed: {alert_error}")
+                return True, f"BREACH_ALERT_FAILED: {str(alert_error)}"
         
-        return True, "Logged" if not is_breach else "BREACH_ALERT"
+        return True, "Logged" if not is_breach else "BREACH_ALERT_SENT"
     except Exception as e:
         return False, str(e)
     finally:

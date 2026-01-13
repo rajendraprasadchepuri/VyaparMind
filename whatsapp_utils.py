@@ -23,8 +23,8 @@ def send_whatsapp_alert(to_phone, message):
     
     # DEMO MODE: Print to console instead of sending
     # To enable: Uncomment Twilio code and add credentials
-    
-    print(f"""
+    """
+    #
     ═══════════════════════════════════════════════
     📱 WHATSAPP ALERT (DEMO MODE)
     ═══════════════════════════════════════════════
@@ -40,12 +40,12 @@ def send_whatsapp_alert(to_phone, message):
     2. Get Account SID, Auth Token, WhatsApp number
     3. Uncomment Twilio code below
     4. Add credentials to .env file
-    """)
-    
+    #
+    print(f""" """)
     return True, "DEMO_MESSAGE_ID"
-    
-    # PRODUCTION CODE (Uncomment when ready):
     """
+    # PRODUCTION CODE (Uncomment when ready):
+    
     try:
         from twilio.rest import Client
         import os
@@ -72,7 +72,7 @@ def send_whatsapp_alert(to_phone, message):
         
     except Exception as e:
         return False, str(e)
-    """
+    
 
 
 def send_temperature_breach_alert(zone_name, recorded_temp, target_min, target_max, manager_phone='+919876543210'):
