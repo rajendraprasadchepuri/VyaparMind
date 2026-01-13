@@ -132,8 +132,41 @@ else:
         # For now, allow generating a current/proforma one.
         
         if st.button("📄 Generate Current Statement (PDF)"):
-             # Reuse our logic?
-             st.success("Statement generated and sent to your email.")
+             client_id = st.session_state.portal_client_id
+             client_email = db.get_client_email(client_id)
+             
+             if client_email:
+                 import email_utils
+                 
+                 # Generate Statement HTML
+                 rows_html = ""
+                 total_paid = 0
+                 for inv in invoices:
+                     total_paid += inv['amount']
+                     rows_html += f"<tr><td>{inv['id']}</td><td>{inv['date']}</td><td>{inv['status']}</td><td>₹{inv['amount']:,}</td></tr>"
+                 
+                 body = f"""
+                 <h2>Statement of Account</h2>
+                 <p>Dear {st.session_state.portal_client_name},</p>
+                 <p>Please find below your statement for recent transactions:</p>
+                 <table border="1" cellpadding="5" cellspacing="0" style="border-collapse: collapse; width: 100%;">
+                    <tr style="background-color: #f2f2f2;"><th>Invoice #</th><th>Date</th><th>Status</th><th>Amount</th></tr>
+                    {rows_html}
+                    <tr><td colspan="3" align="right"><b>Total Paid</b></td><td><b>₹{total_paid:,}</b></td></tr>
+                 </table>
+                 <p>Thank you for your business!</p>
+                 """
+                 
+                 subject = f"Statement: {st.session_state.portal_client_name} - {datetime.now().strftime('%b %Y')}"
+                 
+                 success, msg = email_utils.send_email_report(client_email, subject, body)
+                 
+                 if success:
+                     st.success(f"✅ Statement sent to {client_email}.")
+                 else:
+                     st.error(f"❌ Failed to send email: {msg}")
+             else:
+                 st.error("No email address found for your account. Please contact support.")
 
     # 3. REQUEST DISPATCH
     with tab_req:

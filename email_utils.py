@@ -20,7 +20,8 @@ def send_email_report(to_email, subject, body_html, attachment_path=None):
     """
     
     # DEMO MODE: Print to console
-    print(f"""
+    """
+    print(f'''
     ═══════════════════════════════════════════════
     📧 EMAIL REPORTING (DEMO MODE)
     ═══════════════════════════════════════════════
@@ -36,12 +37,13 @@ def send_email_report(to_email, subject, body_html, attachment_path=None):
     ⚠️ To enable real Email sending:
     1. Configure SMTP settings in .env
     2. Uncomment production code in email_utils.py
-    """)
+    ''')
     
     return True, "DEMO_EMAIL_SENT"
+    """
     
     # PRODUCTION CODE (Uncomment when ready)
-    """
+    
     import smtplib
     from email.mime.text import MIMEText
     from email.mime.multipart import MIMEMultipart
@@ -77,7 +79,6 @@ def send_email_report(to_email, subject, body_html, attachment_path=None):
         return True, "Email sent successfully"
     except Exception as e:
         return False, str(e)
-    """
 
 def generate_weekly_html(client_name, data):
     """Generate HTML template for weekly report."""

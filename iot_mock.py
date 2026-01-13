@@ -20,6 +20,10 @@ import database as db
 from datetime import datetime
 import pandas as pd
 import warnings
+from dotenv import load_dotenv
+
+# Load environment variables (Twilio/Email credentials)
+load_dotenv()
 
 # Suppress warnings
 warnings.filterwarnings("ignore")

@@ -2697,7 +2697,14 @@ def log_temperature(zone_id, recorded_temp, recorded_by="Manual"):
 
                 c.execute(f"SELECT value FROM settings WHERE account_id={PLACEHOLDER} AND key='alert_email'", (acc_id,))
                 row_email = c.fetchone()
-                alert_email = row_email[0] if row_email else None
+                # FALLBACK LOGIC: DB Setting -> Env Var
+                db_email = row_email[0] if row_email else None
+                if not db_email or "@" not in db_email:
+                    alert_email = os.getenv('SMTP_EMAIL')
+                else:
+                    alert_email = db_email
+
+                print(f"📧 Sending Email alert to: {alert_email}")
 
                 # 1. WhatsApp Alert
                 import whatsapp_utils
@@ -2719,7 +2726,11 @@ def log_temperature(zone_id, recorded_temp, recorded_by="Manual"):
                     <p><b>Safe Range:</b> {target_min}°C to {target_max}°C</p>
                     <p>Please take immediate action.</p>
                     """
-                    email_utils.send_email_report(alert_email, subject, body)
+                    email_success, email_msg = email_utils.send_email_report(alert_email, subject, body)
+                    if email_success:
+                        print(f"✅ Email sent to {alert_email}")
+                    else:
+                        print(f"❌ Email sending failed: {email_msg}")
 
             except Exception as alert_error:
                 # Don't fail the whole operation if alert fails, but report it
@@ -2784,6 +2795,20 @@ def get_all_storage_clients():
     df = pd.read_sql_query(f"SELECT * FROM storage_clients WHERE account_id = {PLACEHOLDER} AND status = 'ACTIVE' ORDER BY company_name", conn, params=(aid,))
     conn.close()
     return df
+
+
+def get_client_email(client_id):
+    """Fetch email for a specific client."""
+    conn = get_connection()
+    c = conn.cursor()
+    try:
+        c.execute(f"SELECT email FROM storage_clients WHERE id = {PLACEHOLDER}", (client_id,))
+        row = c.fetchone()
+        return row[0] if row else None
+    except:
+        return None
+    finally:
+        conn.close()
 
 
 def get_client_rate_card(client_id):
@@ -3172,11 +3197,11 @@ def get_cold_storage_analytics():
         
         # 3. Client Distribution
         query_clients = f'''
-            SELECT sc.company_name, SUM(ci.quantity) as total_kg
+            SELECT sc.id, sc.company_name, sc.email, SUM(ci.quantity) as total_kg
             FROM cold_inventory ci
             JOIN storage_clients sc ON ci.client_id = sc.id
             WHERE ci.account_id = {PLACEHOLDER} AND ci.status = 'IN_STOCK'
-            GROUP BY sc.company_name
+            GROUP BY sc.id, sc.company_name, sc.email
             ORDER BY total_kg DESC
         '''
         stats['client_distribution'] = pd.read_sql_query(query_clients, conn, params=(aid,))

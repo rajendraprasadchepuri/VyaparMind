@@ -32,9 +32,19 @@ with col_act2:
                     'compliance_pct': 98.5,
                     'expiring_kg': row['total_kg'] * 0.1 # 10% dummy expiring
                 }
-                html = email_utils.generate_weekly_html(row['company_name'], dummy_data)
-                email_utils.send_email_report(f"contact@{row['company_name'].replace(' ', '').lower()}.com", "Weekly Report", html)
-                count += 1
+                
+                # USE REAL EMAIL 
+                client_email = row.get('email')
+                if client_email and "@" in client_email:
+                    html = email_utils.generate_weekly_html(row['company_name'], dummy_data)
+                    success, msg = email_utils.send_email_report(client_email, "Weekly Report", html)
+                    if success:
+                        count += 1
+                        print(f"✅ Report sent to {row['company_name']} ({client_email})")
+                    else:
+                        st.error(f"Failed to send to {row['company_name']}: {msg}")
+                else:
+                    print(f"⚠️ No email for {row['company_name']}")
             st.toast(f"✅ Sent {count} weekly reports successfully!", icon="📧")
         else:
             st.warning("No active clients found.")
