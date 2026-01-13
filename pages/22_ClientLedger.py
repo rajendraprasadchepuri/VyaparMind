@@ -139,122 +139,179 @@ with tab2:
         
         st.write(f"**Billing Period**: {from_date} to {to_date}")
         
+        # Initialize session state for invoice
+        if 'invoice_data' not in st.session_state:
+            st.session_state.invoice_data = None
+            
         if st.button("💰 Calculate Charges", type="primary", use_container_width=True):
             total_charges, line_items = db.calculate_storage_charges(
                 selected_inv_client_id, str(from_date), str(to_date)
             )
             
             if line_items:
-                st.success(f"✅ Invoice calculated successfully!")
-                
-                st.markdown("---")
-                st.subheader("Invoice Details")
-                
-                # Client info
-                client_info = clients_df[clients_df['id'] == selected_inv_client_id].iloc[0]
-                col_info1, col_info2 = st.columns(2)
-                
-                with col_info1:
-                    st.markdown(f"""
-                    **Bill To:**  
-                    {client_info['company_name']}  
-                    {client_info['contact_person']}  
-                    {client_info['phone']}  
-                    GST: {client_info['gst_number'] if client_info['gst_number'] else 'N/A'}
-                    """)
-                
-                with col_info2:
-                    invoice_num = f"INV/{datetime.now().strftime('%Y%m%d')}/001"
-                    st.markdown(f"""
-                    **Invoice #:** {invoice_num}  
-                    **Date:** {datetime.now().strftime('%d-%b-%Y')}  
-                    **Period:** {from_date} to {to_date}  
-                    """)
-                
-                # Line items
-                st.markdown("---")
-                st.subheader("Itemized Charges")
-                
-                line_items_df = pd.DataFrame(line_items)
-                st.dataframe(
-                    line_items_df,
-                    column_config={
-                        "commodity": "Commodity",
-                        "lot": "Lot #",
-                        "quantity": st.column_config.NumberColumn("Quantity (KG)", format="%.0f"),
-                        "pallets": st.column_config.NumberColumn("Pallets", format="%d"),
-                        "days": st.column_config.NumberColumn("Days", format="%d"),
-                        "rate": st.column_config.NumberColumn("Rate (₹/pallet/day)", format="₹%.2f"),
-                        "amount": st.column_config.NumberColumn("Amount", format="₹%.2f")
-                    },
-                    hide_index=True,
-                    use_container_width=True
-                )
-                
-                # Total
-                st.markdown("---")
-                col_t1, col_t2, col_t3 = st.columns([2, 1, 1])
-                
-                with col_t2:
-                    st.markdown("**Subtotal:**")
-                    st.markdown("**GST (18%):**")
-                    st.markdown("### **Total:**")
-                
-                with col_t3:
-                    gst = total_charges * 0.18
-                    grand_total = total_charges + gst
-                    
-                    st.markdown(f"₹{total_charges:,.2f}")
-                    st.markdown(f"₹{gst:,.2f}")
-                    st.markdown(f"### ₹{grand_total:,.2f}")
-                
-                st.markdown("---")
-                
-                # PDF Download
-                col_pdf1, col_pdf2 = st.columns(2)
-                
-                with col_pdf1:
-                    if st.button("📥 Download PDF Invoice", use_container_width=True, type="primary"):
-                        import pdf_utils
-                        
-                        # Prepare invoice data
-                        invoice_data = {
-                            'invoice_number': invoice_num,
-                            'client_name': client_info['company_name'],
-                            'client_gst': client_info['gst_number'] if client_info['gst_number'] else 'N/A',
-                            'client_address': client_info.get('email', ''),
-                            'invoice_date': datetime.now().strftime('%d-%b-%Y'),
-                            'period_from': str(from_date),
-                            'period_to': str(to_date),
-                            'line_items': line_items,
-                            'subtotal': total_charges,
-                            'gst_amount': gst,
-                            'total': grand_total
-                        }
-                        
-                        # Generate PDF
-                        pdf_filename = f"invoice_{invoice_num.replace('/', '_')}.pdf"
-                        pdf_path = pdf_utils.generate_invoice_pdf(invoice_data, pdf_filename)
-                        
-                        # Download button
-                        with open(pdf_path, "rb") as pdf_file:
-                            st.download_button(
-                                label="⬇️ Click to Download PDF",
-                                data=pdf_file,
-                                file_name=pdf_filename,
-                                mime="application/pdf",
-                                use_container_width=True
-                            )
-                        
-                        # Clean up
-                        import os
-                        if os.path.exists(pdf_path):
-                            os.remove(pdf_path)
-                
-                with col_pdf2:
-                    st.info("💡 Email invoice feature coming soon!")
+                st.session_state.invoice_data = {
+                    'total_charges': total_charges,
+                    'line_items': line_items,
+                    'client_id': selected_inv_client_id,
+                    'from_date': str(from_date),
+                    'to_date': str(to_date)
+                }
+                st.success("✅ Invoice calculated successfully!")
             else:
+                st.session_state.invoice_data = None
                 st.warning("No billable inventory found for this client in the selected period.")
+
+        # Display Invoice if data exists
+        if st.session_state.invoice_data and st.session_state.invoice_data.get('client_id') == selected_inv_client_id:
+            data = st.session_state.invoice_data
+            
+            st.markdown("---")
+            st.subheader("Invoice Details")
+            
+            # Client info
+            client_info = clients_df[clients_df['id'] == data['client_id']].iloc[0]
+            col_info1, col_info2 = st.columns(2)
+            
+            with col_info1:
+                st.markdown(f"""
+                **Bill To:**  
+                {client_info['company_name']}  
+                {client_info['contact_person']}  
+                {client_info['phone']}  
+                GST: {client_info['gst_number'] if client_info['gst_number'] else 'N/A'}
+                """)
+            
+            with col_info2:
+                invoice_num = f"INV/{datetime.now().strftime('%Y%m%d')}/001"
+                st.markdown(f"""
+                **Invoice #:** {invoice_num}  
+                **Date:** {datetime.now().strftime('%d-%b-%Y')}  
+                **Period:** {data['from_date']} to {data['to_date']}  
+                """)
+            
+            # Line items
+            st.markdown("---")
+            st.subheader("Itemized Charges")
+            
+            line_items_df = pd.DataFrame(data['line_items'])
+            st.dataframe(
+                line_items_df,
+                column_config={
+                    "commodity": "Commodity",
+                    "lot": "Lot #",
+                    "quantity": st.column_config.NumberColumn("Quantity (KG)", format="%.0f"),
+                    "pallets": st.column_config.NumberColumn("Pallets", format="%d"),
+                    "days": st.column_config.NumberColumn("Days", format="%d"),
+                    "rate": st.column_config.NumberColumn("Rate (₹/pallet/day)", format="₹%.2f"),
+                    "amount": st.column_config.NumberColumn("Amount", format="₹%.2f")
+                },
+                hide_index=True,
+                use_container_width=True
+            )
+            
+            # Total
+            st.markdown("---")
+            col_t1, col_t2, col_t3 = st.columns([2, 1, 1])
+            
+            gst = data['total_charges'] * 0.18
+            grand_total = data['total_charges'] + gst
+            
+            with col_t2:
+                st.markdown("**Subtotal:**")
+                st.markdown("**GST (18%):**")
+                st.markdown("### **Total:**")
+            
+            with col_t3:
+                st.markdown(f"₹{data['total_charges']:,.2f}")
+                st.markdown(f"₹{gst:,.2f}")
+                st.markdown(f"### ₹{grand_total:,.2f}")
+            
+            st.markdown("---")
+            
+            # PDF Generation - Prepare Data
+            branding_info = db.get_account_branding(db.get_current_account_id())
+            invoice_pdf_data = {
+                'branding': branding_info,
+                'invoice_number': invoice_num,
+                'client_name': client_info['company_name'],
+                'client_gst': client_info['gst_number'] if client_info['gst_number'] else 'N/A',
+                'client_address': client_info.get('email', ''),
+                'invoice_date': datetime.now().strftime('%d-%b-%Y'),
+                'period_from': data['from_date'],
+                'period_to': data['to_date'],
+                'line_items': data['line_items'],
+                'subtotal': data['total_charges'],
+                'gst_amount': gst,
+                'total': grand_total
+            }
+            
+            col_pdf1, col_pdf2 = st.columns(2)
+            
+            with col_pdf1:
+                # Generate PDF immediately so download button has content
+                import pdf_utils
+                import os
+                
+                pdf_filename = f"Invoice_{invoice_num.replace('/', '_')}.pdf"
+                try:
+                    # Always regenerate to ensure latest version/fixes
+                    pdf_utils.generate_invoice_pdf(invoice_pdf_data, pdf_filename)
+                    
+                    with open(pdf_filename, "rb") as f:
+                        pdf_bytes = f.read()
+                        
+                    st.download_button(
+                        label="📥 Download PDF Invoice",
+                        data=pdf_bytes,
+                        file_name=pdf_filename,
+                        mime="application/pdf",
+                        use_container_width=True
+                    )
+                except Exception as e:
+                    st.error(f"Error generating PDF: {e}")
+
+            with col_pdf2:
+                if st.button("📧 Email Invoice to Client", use_container_width=True):
+                    client_email = client_info.get('email')
+                    if client_email and "@" in client_email:
+                        try:
+                            import email_utils
+                            import pdf_utils
+                            
+                            # Ensure PDF exists for attachment
+                            pdf_path_email = f"Invoice_Email_{invoice_num.replace('/', '_')}.pdf"
+                            pdf_utils.generate_invoice_pdf(invoice_pdf_data, pdf_path_email)
+                            
+                            # Send Email
+                            subject = f"Invoice {invoice_num} from VyaparMind Cold Storage"
+                            body = f"""
+                            <html>
+                            <body>
+                                <h3>Invoice Ready</h3>
+                                <p>Dear {client_info['contact_person'] or 'Customer'},</p>
+                                <p>Please find attached the invoice for the period <b>{data['from_date']} to {data['to_date']}</b>.</p>
+                                <p><b>Total Amount:</b> ₹{grand_total:,.2f}</p>
+                                <br>
+                                <p>Thank you for your business!</p>
+                            </body>
+                            </html>
+                            """
+                            
+                            success, msg = email_utils.send_email_report(client_email, subject, body, attachment_path=pdf_path_email)
+                            
+                            if success:
+                                st.success(f"✅ Invoice emailed to {client_email} successfully!")
+                            else:
+                                st.error(f"❌ Failed to send email: {msg}")
+                                
+                            # Cleanup Email PDF
+                            if os.path.exists(pdf_path_email):
+                                os.remove(pdf_path_email)
+                                
+                        except Exception as e:
+                            st.error(f"Error processing email: {e}")
+                    else:
+                        st.error("Client does not have a valid email address configured.")
     else:
         st.warning("Please add clients in the Client Master tab first.")
 

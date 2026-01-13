@@ -3246,3 +3246,56 @@ def get_cold_storage_analytics():
         conn.close()
         
     return stats
+
+def get_account_branding(account_id):
+    """
+    Fetches branding details for the account to use in documents/invoices.
+    Returns dict: {company_name, address, phone, gst, logo_path}
+    """
+    conn = get_connection()
+    c = conn.cursor()
+    
+    # 1. Get Company Name
+    c.execute(f"SELECT company_name FROM accounts WHERE id = {PLACEHOLDER}", (account_id,))
+    res = c.fetchone()
+    company_name = res[0] if res else "Unknown Account"
+    
+    # 2. Get Settings
+    # Default values
+    branding = {
+        "company_name": company_name,
+        "address": "", # Blank if not set
+        "phone": "",
+        "gst": "",
+        "logo_path": "logo_no_text_1.svg" # Default Logo
+    }
+    
+    try:
+        c.execute(f"SELECT key, value FROM settings WHERE account_id = {PLACEHOLDER}", (account_id,))
+        rows = c.fetchall()
+        
+        settings = {row[0]: row[1] for row in rows}
+        
+        if 'store_address' in settings: branding['address'] = settings['store_address']
+        if 'store_phone' in settings: branding['phone'] = settings['store_phone']
+        if 'gst_number' in settings: branding['gst'] = settings['gst_number']
+        if 'logo_path' in settings: branding['logo_path'] = settings['logo_path']
+        if 'store_name' in settings: branding['company_name'] = settings['store_name']
+        
+        # SMART FALLBACK: Check for logo_{account_id} in assets/uploads
+        if branding['logo_path'] == "logo_no_text_1.svg":
+            import os
+            upload_dir = "assets/uploads"
+            # Try supported extensions
+            for ext in ['.png', '.jpg', '.jpeg', '.svg']:
+                filename = f"logo_{account_id}{ext}"
+                filepath = os.path.join(upload_dir, filename)
+                if os.path.exists(filepath):
+                    branding['logo_path'] = filepath.replace("\\", "/") # Ensure forward slashes for cross-platform
+                    break
+        
+    except Exception as e:
+        print(f"Error fetching branding: {e}")
+        
+    conn.close()
+    return branding
