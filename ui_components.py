@@ -120,10 +120,8 @@ def render_sidebar():
     except:
         store_name = "VyaparMind"
         
-    if store_name == "VyaparMind":
-        st.sidebar.markdown(f"## **<span style='color:#009FDF'>Vyapar</span><span style='color:#FFCD00'>Mind</span>**", unsafe_allow_html=True)
-    else:
-        st.sidebar.markdown(f"## **{store_name}**")
+    # Always display Store Name (White Label)
+    st.sidebar.markdown(f"## **{store_name}**")
     
     st.sidebar.markdown("---")
 

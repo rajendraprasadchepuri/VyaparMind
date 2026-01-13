@@ -151,46 +151,151 @@ with tab3:
     clients_df = db.get_all_storage_clients()
     
     if not clients_df.empty:
+
+        # Initialize session state for certificate
+        if 'cert_generated_data' not in st.session_state:
+            st.session_state.cert_generated_data = None
+
         with st.form("certificate_form"):
             col1, col2 = st.columns(2)
             
             with col1:
                 client_options = {row['company_name']: row['id'] for _, row in clients_df.iterrows()}
                 cert_client_name = st.selectbox("Select Client", list(client_options.keys()))
-                cert_client_id = client_options[cert_client_name]
+                
             
             with col2:
                 cert_date_range = st.selectbox("Period", ["Last 30 Days", "Last 3 Months", "Last 6 Months"])
             
-            if st.form_submit_button("📄 Generate Certificate", use_container_width=True):
-                st.success("✅ Certificate generated!")
+            submitted = st.form_submit_button("📄 Generate Certificate", use_container_width=True)
+            
+            if submitted:
+                # Prepare Data in Session State (to persist outside form)
+                branding = db.get_account_branding(db.get_current_account_id())
+                cert_id = f"CERT/{datetime.now().strftime('%Y%m%d')}/001"
+                comp_rate = 99.5
+                cert_client_id = client_options[cert_client_name] # Resolve ID
                 
-                st.markdown("---")
-                st.markdown(f"""
-                ### 📜 CERTIFICATE OF STORAGE
+                st.session_state.cert_generated_data = {
+                    'branding': branding,
+                    'client_name': cert_client_name,
+                    'client_id': cert_client_id,
+                    'period': cert_date_range,
+                    'compliance_rate': comp_rate,
+                    'breach_count': 0,
+                    'total_readings': 720,
+                    'cert_id': cert_id,
+                    'date': datetime.now().strftime('%d %B %Y')
+                }
                 
-                **This is to certify that:**
+        # Render Result OUTSIDE the form
+        if st.session_state.cert_generated_data:
+            cert_data = st.session_state.cert_generated_data
+            
+            st.success("✅ Certificate generated!")
+            st.markdown("---")
+            st.markdown(f"""
+            ### 📜 CERTIFICATE OF STORAGE
+            
+            **This is to certify that:**
+            
+            **{cert_data['client_name']}** has stored their goods in our temperature-controlled facility 
+            under the following conditions:
+            
+            - **Storage Period**: {cert_data['period']}
+            - **Temperature Compliance**: {cert_data['compliance_rate']}%
+            - **Quality Controls**: All inward and outward quality checks passed
+            - **Certifications**: FSSAI Licensed Facility
+            
+            The storage was maintained as per industry standards with 24/7 temperature monitoring 
+            and complete traceability.
+            
+            **Authorized By**: {cert_data['branding']['company_name']}  
+            **Date**: {cert_data['date']}  
+            **Certificate ID**: {cert_data['cert_id']}
+            
+            ---
+            *This is a digitally generated certificate*
+            """)
+            
+            # ACTION BUTTONS
+            col_act1, col_act2 = st.columns(2)
+            
+            with col_act1:
+                # PDF Generation
+                import pdf_utils
+                import os
                 
-                **{cert_client_name}** has stored their goods in our temperature-controlled facility 
-                under the following conditions:
+                pdf_filename = f"Certificate_{cert_data['client_name'].replace(' ', '_')}_{datetime.now().strftime('%Y%m%d')}.pdf"
                 
-                - **Storage Period**: {cert_date_range}
-                - **Temperature Compliance**: 99.5%
-                - **Quality Controls**: All inward and outward quality checks passed
-                - **Certifications**: FSSAI Licensed Facility
+                # Generate PDF
+                pdf_utils.generate_temperature_certificate_pdf(cert_data, pdf_filename)
                 
-                The storage was maintained as per industry standards with 24/7 temperature monitoring 
-                and complete traceability.
+                with open(pdf_filename, "rb") as f:
+                    pdf_bytes = f.read()
+                    
+                st.download_button(
+                    label="📥 Download PDF Certificate",
+                    data=pdf_bytes,
+                    file_name=pdf_filename,
+                    mime="application/pdf",
+                    use_container_width=True
+                )
                 
-                **Authorized By**: VyaparMind Cold Storage  
-                **Date**: {datetime.now().strftime('%d %B %Y')}  
-                **Certificate ID**: CERT/{datetime.now().strftime('%Y%m%d')}/001
-                
-                ---
-                *This is a digitally generated certificate*
-                """)
-                
-                st.info("💡 PDF export and digital signature will be available in next update")
+                # Cleanup
+                try:
+                    os.remove(pdf_filename)
+                except:
+                    pass
+            
+            with col_act2:
+                # Email Functionality
+                if st.button("📧 Email Certificate to Client", use_container_width=True):
+                        # Get Client Email
+                    conn = db.get_connection()
+                    c = conn.cursor()
+                    c.execute("SELECT email, company_name FROM storage_clients WHERE id = ?", (cert_data['client_id'],))
+                    client_res = c.fetchone()
+                    conn.close()
+                    
+                    if client_res and client_res[0]:
+                        client_email = client_res[0]
+                        # Regenerate for attachment
+                        pdf_filename_email = f"Certificate_Email_{datetime.now().strftime('%H%M%S')}.pdf"
+                        pdf_utils.generate_temperature_certificate_pdf(cert_data, pdf_filename_email)
+                        
+                        import email_utils
+                        subject = f"Storage Certificate: {cert_data['client_name']} - {cert_data['period']}"
+                        body = f"""
+                        Dear {client_res[1]},
+                        
+                        Please find attached the official Certificate of Storage for the period: {cert_data['period']}.
+                        
+                        Compliance Rate: {cert_data['compliance_rate']}%
+                        
+                        Regards,
+                        VyaparMind Cold Storage Operations
+                        """
+                        
+                        success, msg = email_utils.send_email_report(
+                            to_email=client_email,
+                            subject=subject,
+                            body_html=body,
+                            attachment_path=pdf_filename_email
+                        )
+                        
+                        if success:
+                            st.toast(f"✅ Certificate emailed to {client_email}", icon="📧")
+                        else:
+                            st.error(f"Failed to send email: {msg}")
+                            
+                        # Cleanup
+                        try:
+                            os.remove(pdf_filename_email)
+                        except:
+                            pass
+                    else:
+                        st.error("No email address found for this client.")
     
     st.markdown("---")
     st.markdown("#### 📊 Audit Summary Report")

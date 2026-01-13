@@ -103,7 +103,7 @@ def draw_header_footer(canvas, doc):
     canvas.drawCentredString(w/2, 28, "Thank You for Your Business!")
     
     canvas.setFont("Helvetica", 8)
-    canvas.drawCentredString(w/2, 15, "VyaparMind ERP | contact@vyaparmind.com | www.vyaparmind.com")
+    canvas.drawCentredString(w/2, 15, f"{company_name} | Powered by VyaparMind")
     
     # Page Number
     canvas.drawRightString(w-20, 15, f"Page {doc.page}")
@@ -241,17 +241,99 @@ def generate_invoice_pdf(invoice_data, filename):
     return filename
 
 def generate_temperature_certificate_pdf(cert_data, filename):
-    """Refined Certificate Generation (Basic implementation kept for backward compat)"""
-    # ... (Keeping existing simple logic or upgrading if needed, focusing on invoice for now)
-    return generate_invoice_pdf(cert_data, filename) # Placeholder redirect or keep original if needed
+    """
+    Generate a PREMIUM Temperature Compliance Certificate.
     
-    # Retrieving original certificate logic for safety if not replacing entirely
-    # For now, let's restore the original certificate function but minimally formatted
-    # to avoid breaking other parts if called.
+    Args:
+        cert_data (dict): {
+            'branding': dict,
+            'client_name': str,
+            'period': str,
+            'compliance_rate': float,
+            'breach_count': int,
+            'total_readings': int,
+            'cert_id': str,
+            'date': str
+        }
+        filename (str): Output PDF filename
+    """
     
-    doc = SimpleDocTemplate(filename, pagesize=A4)
+    # Layout with Premium Template
+    doc = SimpleDocTemplate(filename, pagesize=A4, topMargin=110, bottomMargin=70)
+    
+    # Pass branding info
+    doc.branding_info = cert_data.get('branding', {})
+    
+    frame = Frame(doc.leftMargin, doc.bottomMargin, doc.width, doc.height-40, id='normal')
+    template = PageTemplate(id='Certificate', frames=frame, onPage=draw_header_footer)
+    doc.addPageTemplates([template])
+    
     story = []
     styles = getSampleStyleSheet()
-    story.append(Paragraph("Certificate functionality preserved.", styles['Normal']))
+    
+    # Custom Styles
+    style_title = ParagraphStyle('CertTitle', parent=styles['Heading1'], fontSize=22, textColor=COLOR_PRIMARY, alignment=TA_CENTER, spaceAfter=20)
+    style_subtitle = ParagraphStyle('CertSub', parent=styles['Normal'], fontSize=12, textColor=COLOR_DARK, alignment=TA_CENTER, spaceAfter=30)
+    style_body = ParagraphStyle('CertBody', parent=styles['Normal'], fontSize=11, leading=16, alignment=TA_JUSTIFY, spaceAfter=12)
+    style_label = ParagraphStyle('CertLabel', parent=styles['Normal'], fontSize=10, textColor=colors.grey)
+    style_val = ParagraphStyle('CertVal', parent=styles['Normal'], fontSize=11, textColor=COLOR_DARK, fontName='Helvetica-Bold')
+    
+    # CONTENT
+    story.append(Paragraph("CERTIFICATE OF STORAGE", style_title))
+    story.append(Paragraph("Temperature & Quality Compliance", style_subtitle))
+    
+    story.append(Spacer(1, 0.2*inch))
+    
+    intro_text = f"""
+    This is to certify that <b>{cert_data.get('client_name', 'N/A')}</b> has stored their goods 
+    in our temperature-controlled cold storage facility during the period:
+    """
+    story.append(Paragraph(intro_text, style_body))
+    story.append(Paragraph(f"<b>{cert_data.get('period', 'N/A')}</b>", style_subtitle))
+    
+    story.append(Spacer(1, 0.2*inch))
+    
+    # Metrics Table
+    metrics_data = [
+        [Paragraph("Temperature Compliance Rate", style_label), Paragraph(f"{cert_data.get('compliance_rate', 0):.1f}%", style_val)],
+        [Paragraph("Total Temperature Readings", style_label), Paragraph(str(cert_data.get('total_readings', 0)), style_val)],
+        [Paragraph("Breaches Detected", style_label), Paragraph(str(cert_data.get('breach_count', 0)), style_val)],
+        [Paragraph("Storage Standards", style_label), Paragraph("FSSAI Compliant, FIFO/FEFO Protocol", style_val)],
+    ]
+    
+    t = Table(metrics_data, colWidths=[3*inch, 3*inch])
+    t.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, -1), colors.whitesmoke),
+        ('GRID', (0, 0), (-1, -1), 1, colors.white),
+        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+        ('PADDING', (0, 0), (-1, -1), 12),
+    ]))
+    story.append(t)
+    
+    story.append(Spacer(1, 0.3*inch))
+    
+    footer_text = """
+    The storage was maintained as per industry standards with 24/7 temperature monitoring 
+    and complete traceability. All goods were handled following strict quality control protocols 
+    to ensure maximum freshness and preservation.
+    """
+    story.append(Paragraph(footer_text, style_body))
+    
+    story.append(Spacer(1, 0.8*inch))
+    
+    # Signature Block
+    sig_data = [
+        [Paragraph("Authorized Signatory", style_label), Paragraph(f"Certificate ID: {cert_data.get('cert_id')}", style_label)],
+        [Paragraph(f"<b>{cert_data.get('branding', {}).get('company_name', 'VyaparMind Data')}</b>", style_val), Paragraph(f"Date: {cert_data.get('date')}", style_label)],
+        [Image("assets/seal_placeholder.png", width=1.5*inch, height=0.5*inch) if os.path.exists("assets/seal_placeholder.png") else "", ""]
+    ]
+    
+    sig_table = Table(sig_data, colWidths=[3.5*inch, 2.5*inch])
+    sig_table.setStyle(TableStyle([
+        ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+        ('LINEABOVE', (0, 0), (0, 0), 1, colors.black), # Line for signature
+    ]))
+    story.append(sig_table)
+    
     doc.build(story)
     return filename
