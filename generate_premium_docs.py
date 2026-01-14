@@ -12,7 +12,7 @@ from svglib.svglib import svg2rlg
 from reportlab.graphics import renderPDF
 
 # --- CONFIGURATION ---
-ARTIFACT_DIR = r"C:\Users\rajendraprasad\.gemini\antigravity\brain\711bc411-6a9a-4751-a928-8432f3507221"
+ARTIFACT_DIR = r"C:\Users\rajendraprasad\.gemini\antigravity\brain\e21ad827-c418-4d6f-8655-7ac42fe024b4"
 OUTPUT_DIR = r"c:\rpworkspace\VyaparMind\documentation"
 # PRIMARY LOGO
 LOGO_PATH = r"c:\rpworkspace\VyaparMind\logo_no_text_1.svg"
@@ -199,7 +199,10 @@ def gen_pdf(src, dst):
     print(f"Generated {dst}")
 
 if __name__ == '__main__':
-    for f, out in [("product_proposal.md", "VyaparMind_Proposal_Final.pdf"),
-                   ("user_manual.md", "VyaparMind_Manual_Final.pdf"),
-                   ("technical_documentation.md", "VyaparMind_TechDocs_Final.pdf")]:
+    for f, out in [("VyaparMind_Industry_Map.md", "VyaparMind_Industry_Map.pdf"),
+                   ("implementation_plan.md", "VyaparMind_Implementation_Plan.pdf"),
+                   ("pharma_use_case_plan.md", "VyaparMind_Pharma_Use_Case.pdf"),
+                   ("task.md", "VyaparMind_Task.pdf"),
+                   ("walkthrough.md", "VyaparMind_Walkthrough.pdf"),
+                   ("VyaparMind_Module_Catalog.md", "VyaparMind_Module_Catalog.pdf")]:
         gen_pdf(os.path.join(ARTIFACT_DIR, f), os.path.join(OUTPUT_DIR, out))
