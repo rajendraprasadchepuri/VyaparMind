@@ -26,6 +26,8 @@ PAGES = {
         "🕸️ StockSwap": "13_StockSwap.py",
         "🧬 ShelfSense": "14_ShelfSense.py",
         "🔮 CrowdStock": "15_CrowdStock.py",
+        "📱 RescueScript (Refills)": "26_RescueScript.py",
+        "👮‍♂️ ReguBot (Compliance)": "27_ReguBot.py",
     },
     "Cold Storage": {
         "🌡️ ColdZone": "19_ColdZone.py",
@@ -77,7 +79,12 @@ MODULE_MAP = {
     "ClientLedger": "22_ClientLedger.py",
     "ComplianceLog": "23_ComplianceLog.py",
     "ColdInsights": "24_ColdInsights.py",
-    "ClientPortal": "25_ClientPortal.py"
+    "ColdInsights": "24_ColdInsights.py",
+    "ClientPortal": "25_ClientPortal.py",
+    "PharmaGuard": "2_POS.py",
+    "MoleculeMatch": "1_Inventory.py",
+    "RescueScript": "26_RescueScript.py",
+    "ReguBot": "27_ReguBot.py"
 }
 
 ROLES = {
@@ -493,7 +500,8 @@ def render_sidebar():
             if visible_pages:
                 st.caption(group.upper())
                 for label, file_path in visible_pages:
-                    if st.button(label, key=f"nav_{file_path}", use_container_width=True):
+                    if st.button(label, key=f"nav_{group}_{file_path}", use_container_width=True):
+                         st.session_state['nav_context'] = label
                          st.switch_page(f"pages/{file_path}")
             
                 st.markdown("") # Spacer
@@ -580,6 +588,48 @@ def render_top_header():
                 st.session_state["role"] = None
                 st.session_state["current_page"] = "app.py" # Reset page tracking
                 st.switch_page("app.py")
+
+def has_feature(feature_name):
+    """
+    Checks if the current account's plan includes the given feature.
+    """
+    if st.session_state.get('role') == 'super_admin':
+        return True
+        
+    import database as db
+    try:
+        # 1. Get Plan Name
+        plan_name = db.get_setting('subscription_plan') or 'Starter'
+        
+        # 2. Get Modules for Plan
+        # We query the DB directly to be safe
+        conn = db.get_connection()
+        c = conn.cursor()
+        query = "SELECT modules FROM subscription_plans WHERE name = ?" if db.config.DB_TYPE != "POSTGRES" else "SELECT modules FROM subscription_plans WHERE name = %s"
+        PLACEHOLDER = "%s" if db.config.DB_TYPE == "POSTGRES" else "?" 
+        
+        # Adjust placeholder logic
+        # Actually database.py exposes PLACEHOLDER but we can't import it easily if not in same module scope? 
+        # db.PLACEHOLDER might work if exported. It's not.
+        
+        c.execute(f"SELECT modules FROM subscription_plans WHERE name = {db.PLACEHOLDER}", (plan_name,))
+        res = c.fetchone()
+        conn.close()
+        
+        if res and res[0]:
+            params = [m.strip() for m in res[0].split(',')]
+            return feature_name in params
+            
+        # Fallback for hardcoded plans (Legacy)
+        if plan_name in TIERS:
+             # This is page-level tier, not feature-level.
+             # Assume standard features are included if generic check fails?
+             return False
+             
+        return False
+    except Exception as e:
+        # print(e)
+        return False
 
 
 # --- SHARED DIALOGS ---

@@ -2,6 +2,7 @@ import streamlit as st
 import database as db
 import pandas as pd
 import textwrap
+import pharma_engine as pharma
 
 import ui_components as ui
 
@@ -10,6 +11,8 @@ ui.require_auth()
 ui.render_sidebar()
 ui.render_top_header()
 st.title("💳 VyaparMind POS")
+if "PharmaGuard" in st.session_state.get('nav_context', ''):
+    st.info("💊 **PharmaGuard Safety Mode Active**: Clinical checks will run at checkout.")
 
 
 # Initialize Cart in Session State
@@ -59,7 +62,7 @@ def handle_held_bill_actions():
 
 handle_held_bill_actions()
 
-def add_to_cart(product_id, name, price, cost, stock, qty, tax_rate=0.0):
+def add_to_cart(product_id, name, price, cost, stock, qty, tax_rate=0.0, salt_composition=None):
     # Check total quantity currently in cart for this product
     existing_item_index = next((index for (index, d) in enumerate(st.session_state.cart) if d["id"] == product_id), None)
     current_qty_in_cart = st.session_state.cart[existing_item_index]['qty'] if existing_item_index is not None else 0
@@ -82,6 +85,7 @@ def add_to_cart(product_id, name, price, cost, stock, qty, tax_rate=0.0):
             "cost": cost,
             "qty": qty,
             "tax_rate": tax_rate,
+            "salt_composition": salt_composition,
             "total": price * qty
         })
         st.toast(f"Added {qty} x {name} to cart", icon="🛒")
@@ -201,7 +205,16 @@ with col_products:
                                 if st.button("Add", key=f"add_{row['id']}", use_container_width=True):
                                     tr = row.get('tax_rate', 0.0)
                                     if pd.isna(tr): tr = 0.0
-                                    add_to_cart(row['id'], row['name'], row['price'], row['cost_price'], row['stock_quantity'], qty_val, tr)
+                                    salt = row.get('salt_composition')
+                                    add_to_cart(row['id'], row['name'], row['price'], row['cost_price'], row['stock_quantity'], qty_val, tr, salt)
+                                    
+                                    # MoleculeMatch: Check for substitutes on add
+                                    salt = row.get('salt_composition')
+                                    if salt and ui.has_feature('MoleculeMatch'):
+                                        subs = pharma.find_substitutes(row)
+                                        if not subs.empty:
+                                            best = subs.iloc[0]
+                                            st.toast(f"💡 Tip: {best['name']} is cheaper (₹{best['price']})!", icon="💊")
                                     # We don't need a full rerun here if cart is also fragmented or if we use toast
             else:
                 st.info("No products found.")
@@ -282,6 +295,56 @@ with col_cart:
                 st.markdown(f"**GST: ₹{current_tax:.2f}**")
                 st.markdown(f"<h3>Total: ₹{(current_total + current_tax):.2f}</h3>", unsafe_allow_html=True)
                 
+                # --- PharmaGuard Check ---
+                if ui.has_feature('PharmaGuard'):
+                    cart_df = pd.DataFrame(st.session_state.cart)
+                    warnings = pharma.check_drug_interactions(cart_df)
+                    if warnings:
+                        st.divider()
+                        st.error("🚨 CLINICAL SAFETY ALERTS")
+                        for w in warnings:
+                             if w['severity'] in ['High', 'Severe']:
+                                 st.error(f"**{w['title']}**\n\n{w['description']}")
+                             else:
+                                 st.warning(f"**{w['title']}**\n\n{w['description']}")
+                # -------------------------
+                
+                
+                # --- ReguBot (Narcotic Compliance) ---
+                has_restricted_items = False
+                restricted_msg = []
+                
+                # Check for H1/X/Narcotic
+                for item in st.session_state.cart:
+                    # We need to look up schedule type. Cart usually stores minimal info.
+                    # Ideally cart item should have 'schedule_type'. Let's check or re-fetch.
+                    # Optimization: We check if db fetch is needed or if we can pass it in add_cart
+                    # For now, let's fetch product details for safety or assume 'schedule_type' isn't in cart yet.
+                    # Actually, we can fetch all details in bulk or just do a quick check.
+                    # Or better: `db.get_product_by_id` cached.
+                    
+                    # Assuming we update add_to_cart to include 'schedule_type' later, 
+                    # but for now let's query DB for safety 100%.
+                    full_prod = db.fetch_product_by_id(item['id'])
+                    if full_prod and full_prod.get('schedule_type') in ['H1', 'X', 'Narcotic']:
+                        has_restricted_items = True
+                        restricted_msg.append(f"{item['name']} ({full_prod['schedule_type']})")
+
+                doctor_name = None
+                doctor_reg = None
+                
+                if has_restricted_items:
+                    st.error("👮‍♂️ REGUBOT COMPLIANCE CHECK")
+                    st.warning(f"Prescription Required for: {', '.join(restricted_msg)}")
+                    
+                    with st.container(border=True):
+                        st.caption("Enter Prescribing Doctor Details:")
+                        doctor_name = st.text_input("Doctor Name", key="doc_name_input")
+                        doctor_reg = st.text_input("Doctor Reg No / PMC", key="doc_reg_input")
+                        
+                        if not doctor_name or not doctor_reg:
+                            st.error("🚫 Checkout Blocked: Doctor Details Missing")
+                            
                 # Checkout Section
                 st.write("---")
                 
@@ -319,7 +382,12 @@ with col_cart:
                     final_total_pay = (current_total + current_tax) - points_to_redeem
                     st.markdown(f"**Net Payable: ₹{final_total_pay:.2f}**")
                     
-                    if st.button("Checkout ✅", use_container_width=True):
+                    # BLOCKER LOGIC
+                    can_checkout = True
+                    if has_restricted_items and (not doctor_name or not doctor_reg):
+                        can_checkout = False
+                    
+                    if st.button("Checkout ✅", use_container_width=True, disabled=not can_checkout):
                         # Consolidate items for DB
                         from collections import defaultdict
                         grouped_cart = {}
@@ -335,8 +403,12 @@ with col_cart:
                         total_amt_base = sum(x['total'] for x in items_to_record)
                         
                         # Pass points_redeemed to DB
-                        txn_id = db.record_transaction(items_to_record, total_amt_base, potential_profit, 
-                                                    customer_id=selected_customer_id, points_redeemed=points_to_redeem)
+                        # Pass Doctor Details
+                        txn_id = db.record_transaction(
+                            items_to_record, total_amt_base, potential_profit, 
+                            customer_id=selected_customer_id, points_redeemed=points_to_redeem,
+                            doctor_name=doctor_name, doctor_reg_no=doctor_reg
+                        )
                 
                 # Invoice Generation Block
                 if txn_id:

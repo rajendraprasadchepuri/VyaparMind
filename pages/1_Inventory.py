@@ -20,19 +20,38 @@ with st.expander("➕ Add New Product / Update Stock", expanded=False):
         
         with col1:
             name = st.text_input("Product Name")
-            category = st.selectbox("Category", ["General", "Electronics", "Groceries", "Clothing", "Others"])
+            category = st.selectbox("Category", ["General", "Electronics", "Groceries", "Clothing", "Pharma", "Others"])
             stock = st.number_input("Stock Quantity", min_value=0, step=1)
             
+            manufacturer = None
+            if ui.has_feature('MoleculeMatch') or ui.has_feature('PharmaGuard'):
+                manufacturer = st.text_input("Manufacturer")
+
         with col2:
             price = st.number_input("Selling Price (₹)", min_value=0.0, step=10.0)
             cost = st.number_input("Cost Price (₹)", min_value=0.0, step=10.0)
             tax_rate = st.number_input("Tax Rate (%)", min_value=0.0, step=0.5, value=0.0)
+            
+            schedule_type = None
+            if ui.has_feature('MoleculeMatch') or ui.has_feature('PharmaGuard'):
+                schedule_type = st.selectbox("Schedule Type", ["OTC", "H", "H1", "X"])
+        
+        salt_composition = None
+        if ui.has_feature('MoleculeMatch') or ui.has_feature('PharmaGuard'):
+            salt_composition = st.text_input("Salt Composition (e.g., Paracetamol 500mg)")
+
+        is_chronic = 0
+        refill_interval = 30
+        if ui.has_feature('RescueScript') or ui.has_feature('PharmaGuard'):
+             is_chronic = 1 if st.checkbox("🔄 Chronic Condition (Auto-Refill)") else 0
+             if is_chronic:
+                 refill_interval = st.number_input("Refill Interval (Days)", min_value=1, value=30, step=1)
 
         submitted = st.form_submit_button("Add Product", use_container_width=True)
         
         if submitted:
             if name:
-                success = db.add_product(name, category, price, cost, stock, tax_rate)
+                success = db.add_product(name, category, price, cost, stock, tax_rate, salt_composition, manufacturer, schedule_type, is_chronic=is_chronic, refill_interval=refill_interval)
                 if success:
                     st.success(f"Successfully added {name} to inventory!")
                     import time
@@ -170,6 +189,12 @@ with st.form("search_form_inventory"):
 def render_inventory_table():
     # Load Data (Optimized - uses server-side search from database.py)
     df = db.fetch_all_products(search_term=search_term if 'search_term' in locals() else None)
+    
+    # Feature Gate Columns
+    if not (ui.has_feature('MoleculeMatch') or ui.has_feature('PharmaGuard')):
+        # Drops columns if they exist
+        cols_to_drop = ['salt_composition', 'manufacturer', 'schedule_type']
+        df = df.drop(columns=[c for c in cols_to_drop if c in df.columns], errors='ignore')
 
     if not df.empty:
         # Alerts (Contextual to search)
@@ -187,6 +212,9 @@ def render_inventory_table():
                 "stock_quantity": st.column_config.NumberColumn("Stock", min_value=0, step=1), # Changed to Number for editing
                 "tax_rate": st.column_config.NumberColumn("Tax (%)", min_value=0.0, step=0.5, format="%.1f%%"),
                 "updated_at": st.column_config.DatetimeColumn("Last Updated", format="D MMM, HH:mm"),
+                "salt_composition": st.column_config.TextColumn("Salt"),
+                "manufacturer": st.column_config.TextColumn("Mfg"),
+                "schedule_type": st.column_config.SelectboxColumn("Sch", options=["OTC", "H", "H1", "X"]),
             },
             disabled=["id", "created_at", "updated_at"],
             hide_index=True,
@@ -209,13 +237,17 @@ def render_inventory_table():
             for index, row in edited_df.iterrows():
                 original_row = df.loc[index]
                 
-                # Check for specific field changes (Price, Cost, Stock, Tax)
+                # Check for specific field changes (Price, Cost, Stock, Tax, Pharma)
                 if (row['price'] != original_row['price']) or \
                    (row['cost_price'] != original_row['cost_price']) or \
                    (row['stock_quantity'] != original_row['stock_quantity']) or \
-                   (row['tax_rate'] != original_row['tax_rate']):
+                   (row['tax_rate'] != original_row['tax_rate']) or \
+                   (row['salt_composition'] != original_row.get('salt_composition')) or \
+                   (row['manufacturer'] != original_row.get('manufacturer')) or \
+                   (row['schedule_type'] != original_row.get('schedule_type')):
                    
-                    db.update_product(row['id'], row['price'], row['cost_price'], row['stock_quantity'], row['tax_rate'])
+                    db.update_product(row['id'], row['price'], row['cost_price'], row['stock_quantity'], row['tax_rate'], 
+                                      row.get('salt_composition'), row.get('manufacturer'), row.get('schedule_type'))
                     changes_count += 1
             
             if changes_count > 0:

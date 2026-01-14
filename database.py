@@ -400,6 +400,59 @@ def init_db():
     # Ensure Cold Storage Tables are created
     create_cold_storage_tables(conn)
 
+    # --- PHARMA MIGRATIONS ---
+    # 1. Update Products Table
+    try:
+        c.execute("SELECT salt_composition FROM products LIMIT 1")
+    except:
+        c.execute("ALTER TABLE products ADD COLUMN salt_composition TEXT")
+        c.execute("ALTER TABLE products ADD COLUMN manufacturer TEXT")
+        c.execute("ALTER TABLE products ADD COLUMN schedule_type TEXT") # H, H1, X, OTC
+    
+    # RescueScript Migration
+    try:
+        c.execute("ALTER TABLE products ADD COLUMN is_chronic INTEGER DEFAULT 0")
+        c.execute("ALTER TABLE products ADD COLUMN refill_interval INTEGER DEFAULT 30")
+    except: pass
+
+    # Refill Reminders Table (RescueScript)
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS refill_reminders (
+            id TEXT PRIMARY KEY,
+            account_id TEXT DEFAULT '1111222233334444',
+            customer_id TEXT,
+            product_id TEXT,
+            last_purchase_date TIMESTAMP,
+            due_date TIMESTAMP,
+            status TEXT DEFAULT 'PENDING', -- PENDING, SENT, REFILLED, SKIPPED, CANCELLED
+            reminder_sent_at TIMESTAMP,
+            FOREIGN KEY (account_id) REFERENCES accounts(id),
+            FOREIGN KEY (customer_id) REFERENCES customers(id),
+            FOREIGN KEY (product_id) REFERENCES products(id)
+        )
+    ''')
+
+
+
+    # ReguBot Migration
+    try:
+        c.execute("ALTER TABLE transactions ADD COLUMN doctor_name TEXT")
+        c.execute("ALTER TABLE transactions ADD COLUMN doctor_reg_no TEXT")
+    except: pass
+
+    # 2. Drug Interactions Table
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS drug_interactions (
+            id TEXT PRIMARY KEY,
+            salt_a TEXT NOT NULL,
+            salt_b TEXT NOT NULL,
+            severity TEXT DEFAULT 'Moderate', -- Low, Moderate, High, Severe
+            description TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(salt_a, salt_b)
+        )
+    ''')
+
     conn.commit()
     conn.close()
 
@@ -448,14 +501,14 @@ def set_setting(key, value):
     finally:
         conn.close()
 
-def add_product(name, category, price, cost_price, stock_quantity, tax_rate=0.0, override_account_id=None):
+def add_product(name, category, price, cost_price, stock_quantity, tax_rate=0.0, salt_composition=None, manufacturer=None, schedule_type=None, override_account_id=None, is_chronic=0, refill_interval=30):
     conn = get_connection()
     c = conn.cursor()
     account_id = override_account_id if override_account_id is not None else get_current_account_id()
     new_id = generate_unique_id(16)
     try:
-        c.execute(f"INSERT INTO products (id, account_id, name, category, price, cost_price, stock_quantity, tax_rate) VALUES ({PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER})",
-                  (new_id, account_id, name, category, price, cost_price, stock_quantity, tax_rate))
+        c.execute(f"INSERT INTO products (id, account_id, name, category, price, cost_price, stock_quantity, tax_rate, salt_composition, manufacturer, schedule_type, is_chronic, refill_interval) VALUES ({PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER})",
+                  (new_id, account_id, name, category, price, cost_price, stock_quantity, tax_rate, salt_composition, manufacturer, schedule_type, is_chronic, refill_interval))
         conn.commit()
         return True, "Product added successfully."
     except Exception as e:
@@ -467,14 +520,14 @@ def add_product(name, category, price, cost_price, stock_quantity, tax_rate=0.0,
         _fetch_all_products_impl.clear()
         _fetch_pos_inventory_impl.clear()
 
-def update_product(product_id, price, cost_price, stock_quantity, tax_rate):
-    """Updates price, cost, stock, and tax (Scoped)."""
+def update_product(product_id, price, cost_price, stock_quantity, tax_rate, salt_composition=None, manufacturer=None, schedule_type=None, is_chronic=0, refill_interval=30):
+    """Updates price, cost, stock, tax, and pharma fields (Scoped)."""
     conn = get_connection()
     c = conn.cursor()
     aid = get_current_account_id()
     try:
-        c.execute(f"UPDATE products SET price = {PLACEHOLDER}, cost_price = {PLACEHOLDER}, stock_quantity = {PLACEHOLDER}, tax_rate = {PLACEHOLDER}, updated_at = {PLACEHOLDER} WHERE id = {PLACEHOLDER} AND account_id = {PLACEHOLDER}",
-                  (price, cost_price, stock_quantity, tax_rate, datetime.now(), product_id, aid))
+        c.execute(f"UPDATE products SET price = {PLACEHOLDER}, cost_price = {PLACEHOLDER}, stock_quantity = {PLACEHOLDER}, tax_rate = {PLACEHOLDER}, salt_composition = {PLACEHOLDER}, manufacturer = {PLACEHOLDER}, schedule_type = {PLACEHOLDER}, is_chronic = {PLACEHOLDER}, refill_interval = {PLACEHOLDER}, updated_at = {PLACEHOLDER} WHERE id = {PLACEHOLDER} AND account_id = {PLACEHOLDER}",
+                  (price, cost_price, stock_quantity, tax_rate, salt_composition, manufacturer, schedule_type, is_chronic, refill_interval, datetime.now(), product_id, aid))
         conn.commit()
         return True
     except Exception as e:
@@ -1519,11 +1572,12 @@ def predict_labor_demand(weather, event):
     staff_needed = max(2, int(daily_vol / 20) + 1)
     return staff_needed
 
-def record_transaction(items, total_amount, total_profit, customer_id=None, points_redeemed=0, payment_method='CASH', override_account_id=None):
+def record_transaction(items, total_amount, total_profit, customer_id=None, points_redeemed=0, payment_method='CASH', override_account_id=None, doctor_name=None, doctor_reg_no=None):
     """
     items: list of dicts {'id': prod_id, 'name': name, 'qty': qty, 'price': price, 'cost': cost}
     customer_id: Optional ID of the customer
     points_redeemed: Amount of loyalty points used (1 point = 1 unit currency)
+    doctor_name, doctor_reg_no: Optional for Pharma/H1 Compliance
     """
     conn = get_connection()
     c = conn.cursor()
@@ -1540,8 +1594,9 @@ def record_transaction(items, total_amount, total_profit, customer_id=None, poin
     
     try:
         # 1. Create Transaction Record (With Account ID)
-        c.execute(f'INSERT INTO transactions (id, account_id, total_amount, total_profit, timestamp, customer_id, transaction_hash, points_redeemed, payment_method) VALUES ({PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER})', 
-                  (new_txn_id, aid, total_amount, total_profit, datetime.now(), customer_id, txn_hash, points_redeemed, payment_method))
+        c.execute(f'INSERT INTO transactions (id, account_id, total_amount, total_profit, timestamp, customer_id, transaction_hash, points_redeemed, payment_method, doctor_name, doctor_reg_no) VALUES ({PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER})', 
+                  (new_txn_id, aid, total_amount, total_profit, datetime.now(), customer_id, txn_hash, points_redeemed, payment_method, doctor_name, doctor_reg_no))
+
         
         transaction_id = new_txn_id # Use our generated ID
         
@@ -2155,6 +2210,8 @@ def add_plan(name, price, modules=""):
         c.execute(f"INSERT INTO subscription_plans (name, price, modules) VALUES ({PLACEHOLDER}, {PLACEHOLDER}, {PLACEHOLDER})", (name, price, modules))
         conn.commit()
         return True, "Plan Added."
+    except sqlite3.IntegrityError:
+        return False, f"Plan '{name}' already exists."
     except Exception as e:
         return False, str(e)
     finally:
