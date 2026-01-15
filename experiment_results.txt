@@ -1,0 +1,6 @@
+ReguBot Experiment Results
+==========================
+Date: 2026-01-15 00:18:13.449485
+Dataset: 5,000 Transactions, 200 Products
+Query Latency (Avg): 1.61 ms
+NLP Accuracy (n=500): 52.20%
