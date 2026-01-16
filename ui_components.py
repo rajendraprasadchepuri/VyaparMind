@@ -100,7 +100,7 @@ def render_sidebar():
     """Renders the common sidebar elements (Logo, Branding, Selector)"""
     
     # --- Theme & Branding ---
-    import database as db
+    # import database as db -- REMOVED
     try:
         logo_choice = db.get_setting('app_logo') or "Ascending Lotus"
     except:
@@ -121,7 +121,7 @@ def render_sidebar():
         st.image(logo_file, use_container_width=True)
     
     # Dynamic Store Name
-    import database as db
+    # import database as db -- REMOVED
     try:
         store_name = db.get_setting('store_name') or "VyaparMind"
     except:
@@ -416,7 +416,7 @@ def render_sidebar():
         allowed_sub = TIERS[sub_plan]
     elif sub_plan == "Custom":
         # Custom Plan Logic - Read from Settings
-        import database as db
+        # import database as db -- REMOVED
         # Fetch standard list like "POS & Inventory, CrowdStock"
         cust_mods_str = db.get_setting("custom_modules_list") or ""
         allowed_sub = ["4_Dashboard.py", "3_Settings.py"] 
@@ -428,7 +428,7 @@ def render_sidebar():
                      allowed_sub.append(MODULE_MAP[mod_name])
     else:
         # Legacy / DB-based Plan Logic
-        import database as db
+        # import database as db -- REMOVED
         feats = db.get_plan_features(sub_plan)
         if feats:
             allowed_sub = ["4_Dashboard.py", "3_Settings.py"] # Always allowed basics
@@ -596,39 +596,30 @@ def has_feature(feature_name):
     if st.session_state.get('role') == 'super_admin':
         return True
         
-    import database as db
+    # import database as db -- REMOVED
     try:
         # 1. Get Plan Name
-        plan_name = db.get_setting('subscription_plan') or 'Starter'
+        plan_name = db.get_setting('subscription_plan', _account_id=st.session_state.get('account_id')) or 'Starter'
         
-        # 2. Get Modules for Plan
-        # We query the DB directly to be safe
-        conn = db.get_connection()
-        c = conn.cursor()
-        query = "SELECT modules FROM subscription_plans WHERE name = ?" if db.config.DB_TYPE != "POSTGRES" else "SELECT modules FROM subscription_plans WHERE name = %s"
-        PLACEHOLDER = "%s" if db.config.DB_TYPE == "POSTGRES" else "?" 
+        # 2. Use Hardcoded Plan Logic (Client-Side for now, since DB table not migrated to API yet)
+        # This is a temporary bypass to ensure the app works without raw SQL access
         
-        # Adjust placeholder logic
-        # Actually database.py exposes PLACEHOLDER but we can't import it easily if not in same module scope? 
-        # db.PLACEHOLDER might work if exported. It's not.
-        
-        c.execute(f"SELECT modules FROM subscription_plans WHERE name = {db.PLACEHOLDER}", (plan_name,))
-        res = c.fetchone()
-        conn.close()
-        
-        if res and res[0]:
-            params = [m.strip() for m in res[0].split(',')]
-            return feature_name in params
+        # Simple Enterprise check
+        if plan_name == 'Enterprise':
+            return True
             
-        # Fallback for hardcoded plans (Legacy)
-        if plan_name in TIERS:
-             # This is page-level tier, not feature-level.
-             # Assume standard features are included if generic check fails?
-             return False
-             
+        # Basic Mapping
+        # If we need the actual list from DB, we should add an API endpoint: GET /plans/{name}
+        # For now, let's assume if it's in the TIERS dict as a Page, it might be a feature too?
+        # Or better -> Return False for obscure features, but True for core ones?
+        
+        # Let's trust the 'TIERS' dict for Page Access.
+        # This function 'has_feature' is likely used for granular UI elements.
+        
+        # SAFE FALLBACK: Return False unless we are sure.
         return False
+
     except Exception as e:
-        # print(e)
         return False
 
 

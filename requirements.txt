@@ -6,3 +6,9 @@ psycopg2-binary
 python-dotenv
 reportlab
 Pillow
+fastapi
+uvicorn
+aiosqlite
+asyncpg
+httpx
+redis

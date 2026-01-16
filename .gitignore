@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.pyc
+.env
+venv/
+env/
+
+# Database
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*_archive_*.db
+
+# OS
+.DS_Store
+
+# Streamlit
+.streamlit/
+
+# Testing/Benchmark artifacts
+benchmark_*.py
+load_test.py
+test_*.db

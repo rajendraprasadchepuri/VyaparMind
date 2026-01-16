@@ -1,5 +1,5 @@
 import streamlit as st
-import database as db
+import api_client as db
 import pandas as pd
 import textwrap
 import pharma_engine as pharma
