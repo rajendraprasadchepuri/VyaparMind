@@ -238,6 +238,7 @@ def render_sidebar():
             box-shadow: none;
         }
 
+
         /* --- GLOBAL LAYOUT FIXES --- */
         
         /* 1. Prevent Tables from overflowing into other columns */

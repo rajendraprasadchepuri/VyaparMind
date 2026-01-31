@@ -1,14 +1,56 @@
-streamlit
-pandas
-plotly
-openpyxl
-psycopg2-binary
-python-dotenv
-reportlab
-Pillow
-fastapi
-uvicorn
-aiosqlite
-asyncpg
-httpx
-redis
+# Core Framework
+streamlit>=1.30.0
+pandas>=2.0.0
+numpy>=1.24.0
+
+# Data Visualization
+plotly>=5.18.0
+
+# Excel Support
+openpyxl>=3.1.0
+
+# Database
+psycopg2-binary>=2.9.9
+aiosqlite>=0.19.0
+asyncpg>=0.29.0
+
+# Environment & Configuration
+python-dotenv>=1.0.0
+
+# PDF Generation
+reportlab>=4.0.0
+fpdf2>=2.7.0
+svglib>=1.5.1
+
+# Image Processing
+Pillow>=10.0.0
+
+# API Framework
+fastapi>=0.109.0
+uvicorn[standard]>=0.27.0
+pydantic>=2.5.0
+httpx>=0.26.0
+
+# Communication
+twilio>=8.11.0
+
+# Caching
+redis>=5.0.0
+
+# HTTP Requests
+requests>=2.31.0
+
+# System Monitoring
+psutil>=5.9.0
+
+# Email Utilities (if using custom email module)
+# email-validator>=2.1.0
+
+# NLP/AI (if implementing ReguBot features)
+# openai>=1.0.0
+# langchain>=0.1.0
+
+# Additional utilities
+# python-multipart>=0.0.6  # For FastAPI file uploads
+# bcrypt>=4.1.0  # For password hashing
+# PyJWT>=2.8.0  # For JWT authentication

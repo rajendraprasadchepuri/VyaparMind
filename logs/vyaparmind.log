@@ -1,0 +1,17 @@
+2026-01-31 13:04:35 - vyaparmind - INFO - Starting database optimization...
+2026-01-31 13:04:35 - vyaparmind - INFO - Created index: CREATE INDEX IF NOT EXISTS idx_purchase_orders_account_id ON purchase_orders(account_id);
+2026-01-31 13:04:35 - vyaparmind - INFO - Created index: CREATE INDEX IF NOT EXISTS idx_purchase_orders_status ON purchase_orders(status);
+2026-01-31 13:04:35 - vyaparmind - INFO - Created index: CREATE INDEX IF NOT EXISTS idx_users_account_id ON users(account_id);
+2026-01-31 13:04:35 - vyaparmind - INFO - Created index: CREATE INDEX IF NOT EXISTS idx_users_username ON users(username);
+2026-01-31 13:04:35 - vyaparmind - INFO - Database vacuumed successfully
+2026-01-31 13:04:35 - vyaparmind - INFO - Database analyzed successfully
+2026-01-31 13:04:35 - vyaparmind - INFO - Database optimization complete: 4 indexes created
+2026-01-31 13:11:41 - vyaparmind - INFO - Application started
+2026-01-31 13:11:41 - vyaparmind - INFO - Operation: user_login | Context: {"operation": "user_login", "timestamp": "2026-01-31T13:11:41.310125", "user": "admin", "account_id": "TEST123", "ip": "192.168.1.1"}
+2026-01-31 13:11:41 - vyaparmind - WARNING - Low stock detected | Context: {"product": "Apple", "stock": 5}
+2026-01-31 13:11:41 - vyaparmind - ERROR - Database connection failed | Context: {"database": "retail_supply_chain.db"}
+NoneType: None
+2026-01-31 13:11:41 - vyaparmind - ERROR - Error: DatabaseError - Query timeout | Context: {"error_type": "DatabaseError", "error_message": "Query timeout", "timestamp": "2026-01-31T13:11:41.310963", "query": "SELECT * FROM products WHERE account_id = ?"}
+NoneType: None
+2026-01-31 13:11:41 - vyaparmind - ERROR - Error: ValidationError - Invalid email format | Context: {"error_type": "ValidationError", "error_message": "Invalid email format", "timestamp": "2026-01-31T13:11:41.311167", "user": "test_user", "field": "email", "value": "invalid-email"}
+NoneType: None

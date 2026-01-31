@@ -1,0 +1,6 @@
+2026-01-31 13:11:41 - vyaparmind - ERROR - Database connection failed | Context: {"database": "retail_supply_chain.db"}
+NoneType: None
+2026-01-31 13:11:41 - vyaparmind - ERROR - Error: DatabaseError - Query timeout | Context: {"error_type": "DatabaseError", "error_message": "Query timeout", "timestamp": "2026-01-31T13:11:41.310963", "query": "SELECT * FROM products WHERE account_id = ?"}
+NoneType: None
+2026-01-31 13:11:41 - vyaparmind - ERROR - Error: ValidationError - Invalid email format | Context: {"error_type": "ValidationError", "error_message": "Invalid email format", "timestamp": "2026-01-31T13:11:41.311167", "user": "test_user", "field": "email", "value": "invalid-email"}
+NoneType: None
