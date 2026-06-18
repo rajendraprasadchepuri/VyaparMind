@@ -22,7 +22,8 @@ class CacheManager:
             self.use_redis = True
             print("✅ Connected to Redis Cache")
         except Exception as e:
-            print(f"⚠️ Redis unavailable ({e}). Using In-Memory Cache.")
+            self.redis = None
+            print(f"[Warning] Redis unavailable ({e}). Using In-Memory Cache.")
             self.use_redis = False
 
     async def get(self, key: str) -> Optional[Any]:
